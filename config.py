@@ -44,6 +44,7 @@ BRD_STATUS_MAP = {
     "진행 중":             "Approved",
     "해결됨":              "Approved",
     "Dropped":            "Rejected",
+    "종료":               "Approved",
 }
 
 # Scoring 가중치

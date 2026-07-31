@@ -1,6 +1,7 @@
 import json
 import anthropic
 from config import ANTHROPIC_API_KEY, SCORE_WEIGHTS
+from jira_client import JiraClient
 
 _client = None
 
@@ -76,9 +77,13 @@ BRD 상태: {ticket['brd_status_raw']}
 
 
 def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
-    """여러 티켓을 순차 분석. 분석 결과를 원본 티켓 dict에 병합하여 반환."""
+    """여러 티켓을 순차 분석. description을 개별 조회 후 분석 결과 병합하여 반환."""
+    jira = JiraClient()
     results = []
     for t in tickets:
+        # description 개별 조회
+        if not t.get("description"):
+            t["description"] = jira.get_description(t["key"])
         try:
             analysis = analyze_ticket(t)
         except Exception as e:

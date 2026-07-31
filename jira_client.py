@@ -20,36 +20,65 @@ class JiraClient:
 
     def get_new_improvement_tickets(self, extra_jql: str = "") -> list[dict]:
         """CCIPRJ, KCCIVOC, KEUVOCOP의 New/Improvement 티켓 전체 조회."""
-        project_clause = ", ".join(f'"{p}"' for p in JIRA_PROJECTS)
-        jql = f"project in ({project_clause}) AND issuetype in (New, Improvement, 신규, 개선) ORDER BY created DESC"
+        project_clause = ", ".join(JIRA_PROJECTS)
+        jql = f'project in ({project_clause}) AND issuetype in ("신규/개선", "Urgent Request") ORDER BY created DESC'
         if extra_jql:
             jql = f"({jql}) AND {extra_jql}"
         return self._search(jql)
 
     def _search(self, jql: str) -> list[dict]:
+        # description은 /search/jql 미지원 → 개별 티켓 조회로 처리
+        # /search/jql 은 nextPageToken 방식 페이지네이션 사용
         fields = [
-            "summary", "reporter", "created", "duedate", "status", "description",
-            JIRA_FIELDS["country"], JIRA_FIELDS["brd_status"], JIRA_FIELDS["feature_type"],
+            "summary", "reporter", "created", "duedate",
+            "status", "issuetype",
+            JIRA_FIELDS["country"],
         ]
-        results, start = [], 0
+        results = []
+        payload = {"jql": jql, "maxResults": 100, "fields": fields}
         while True:
-            data = self._get("/search", params={
-                "jql": jql,
-                "startAt": start,
-                "maxResults": 100,
-                "fields": ",".join(fields),
-            })
+            r = requests.post(
+                f"{self.base}/search/jql",
+                auth=self.auth,
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=payload,
+            )
+            r.raise_for_status()
+            data = r.json()
             issues = data.get("issues", [])
             results.extend(issues)
-            start += len(issues)
-            if start >= data.get("total", 0):
+            next_token = data.get("nextPageToken")
+            if not next_token or not issues:
                 break
+            payload = {"jql": jql, "maxResults": 100, "fields": fields, "nextPageToken": next_token}
         return [self._normalize(i) for i in results]
+
+    def get_description(self, issue_key: str) -> str:
+        """티켓 개별 조회로 description 가져오기."""
+        try:
+            data = self._get(f"/issue/{issue_key}", params={"fields": "description"})
+            return self._extract_text(data["fields"].get("description"))
+        except Exception:
+            return ""
 
     def _normalize(self, issue: dict) -> dict:
         f = issue["fields"]
-        country_raw = (f.get(JIRA_FIELDS["country"]) or {}).get("value", "")
-        brd_raw = (f.get(JIRA_FIELDS["brd_status"]) or {}).get("value", "미해결")
+
+        # 국가: customfield_10175 → 리스트 또는 단일 객체
+        country_field = f.get(JIRA_FIELDS["country"])
+        if isinstance(country_field, list):
+            country_raw = country_field[0].get("value", "") if country_field else ""
+        elif isinstance(country_field, dict):
+            country_raw = country_field.get("value", "")
+        else:
+            country_raw = country_field or ""
+
+        # BRD 상태: 표준 status 필드
+        brd_raw = (f.get("status") or {}).get("name", "미해결")
+
+        # Feature type: 표준 issuetype 필드
+        feature_type = (f.get("issuetype") or {}).get("name", "")
+
         return {
             "key":            issue["key"],
             "summary":        f.get("summary", ""),
@@ -62,19 +91,21 @@ class JiraClient:
             "region":         self._classify_region(country_raw),
             "brd_status_raw": brd_raw,
             "brd_approval":   BRD_STATUS_MAP.get(brd_raw, "Pre-BRD"),
-            "feature_type":   (f.get(JIRA_FIELDS["feature_type"]) or {}).get("value", ""),
+            "feature_type":   feature_type,
+            "description":    "",  # get_description()으로 별도 조회
         }
 
     @staticmethod
     def _classify_region(country: str) -> str:
         if not country:
             return "HQ"
-        c = country.strip()
-        if c in ("KR", "Korea"):
+        c = country.strip().upper()
+        if c in ("KR", "KOREA"):
             return "KR"
-        if c in ("All", "Global", "HQ"):
+        if c in ("ALL", "GLOBAL", "HQ"):
             return "HQ"
-        if c in EU_COUNTRIES:
+        eu = {c.upper() for c in EU_COUNTRIES}
+        if c in eu:
             return "EU"
         return "HQ"
 
