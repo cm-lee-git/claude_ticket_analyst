@@ -1,0 +1,32 @@
+name: Doc1 KKR 주간 보고 업데이트
+
+on:
+  schedule:
+    # 매주 월요일 10:00 KST (= 01:00 UTC)
+    - cron: '0 1 * * 1'
+  workflow_dispatch:  # 수동 실행 버튼
+
+jobs:
+  update-doc1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: Doc1 업데이트
+        env:
+          ATLASSIAN_EMAIL:      ${{ secrets.ATLASSIAN_EMAIL }}
+          ATLASSIAN_API_TOKEN:  ${{ secrets.ATLASSIAN_API_TOKEN }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          JIRA_FIELD_COUNTRY:   ${{ secrets.JIRA_FIELD_COUNTRY }}
+          JIRA_FIELD_BRD_STATUS:${{ secrets.JIRA_FIELD_BRD_STATUS }}
+          JIRA_FIELD_FEATURE_TYPE: ${{ secrets.JIRA_FIELD_FEATURE_TYPE }}
+        run: python main.py --doc1
