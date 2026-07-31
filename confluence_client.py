@@ -57,26 +57,26 @@ class ConfluenceClient:
 
     @staticmethod
     def replace_section(html: str, marker: str, new_content: str) -> str:
-        """<!-- MARKER_START --> ~ <!-- MARKER_END --> 사이를 new_content로 덮어씁니다."""
-        pattern = rf'(<!-- {marker}_START -->).*?(<!-- {marker}_END -->)'
+        """<p>MARKER_START</p> ~ <p>MARKER_END</p> 사이를 new_content로 덮어씁니다."""
+        pattern = rf'(<p>{marker}_START</p>).*?(<p>{marker}_END</p>)'
         replacement = rf'\1\n{new_content}\n\2'
         result = re.sub(pattern, replacement, html, flags=re.DOTALL)
         if result == html:
             raise ValueError(
                 f"마커 '{marker}_START / {marker}_END'를 페이지에서 찾을 수 없습니다.\n"
-                f"Confluence 페이지 편집기에서 해당 마커가 삽입되어 있는지 확인하세요."
+                f"Confluence 페이지에 <p>{marker}_START</p> 마커가 있는지 확인하세요."
             )
         return result
 
     @staticmethod
     def append_to_section(html: str, marker: str, new_content: str) -> str:
-        """<!-- MARKER_START --> ~ <!-- MARKER_END --> 사이의 기존 내용 끝에 new_content를 추가합니다 (히스토리 누적용)."""
-        pattern = rf'(<!-- {marker}_START -->.*?)(<!-- {marker}_END -->)'
+        """<p>MARKER_START</p> ~ <p>MARKER_END</p> 사이 끝에 new_content를 추가합니다 (히스토리 누적용)."""
+        pattern = rf'(<p>{marker}_START</p>.*?)(<p>{marker}_END</p>)'
         replacement = rf'\1{new_content}\n\2'
         result = re.sub(pattern, replacement, html, flags=re.DOTALL)
         if result == html:
             raise ValueError(
                 f"마커 '{marker}_START / {marker}_END'를 페이지에서 찾을 수 없습니다.\n"
-                f"Confluence 페이지 편집기에서 해당 마커가 삽입되어 있는지 확인하세요."
+                f"Confluence 페이지에 <p>{marker}_START</p> 마커가 있는지 확인하세요."
             )
         return result
