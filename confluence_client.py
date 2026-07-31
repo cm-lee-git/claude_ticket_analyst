@@ -1,7 +1,7 @@
 import re
 import requests
 from requests.auth import HTTPBasicAuth
-from config import CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN, CONFLUENCE_PARENT_PAGE_ID, DOC_TITLE_KEYWORDS
+from config import CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN, CONFLUENCE_PARENT_PAGE_ID, DOC_TITLE_KEYWORDS, DOC_PAGE_IDS
 
 
 class ConfluenceClient:
@@ -29,19 +29,10 @@ class ConfluenceClient:
         """doc_key ('doc1'|'doc2'|'doc3') 에 해당하는 페이지 메타 반환."""
         if doc_key in self._page_cache:
             return self._page_cache[doc_key]
-        keyword = DOC_TITLE_KEYWORDS[doc_key]
-        children = self.get_child_pages()
-        for page in children:
-            title = page.get("title", "")
-            if doc_key == "doc2":
-                if keyword in title and "(Kia)" not in title:
-                    self._page_cache[doc_key] = page
-                    return page
-            else:
-                if keyword in title:
-                    self._page_cache[doc_key] = page
-                    return page
-        raise ValueError(f"페이지를 찾을 수 없음: {doc_key} (keyword='{keyword}')")
+        page_id = DOC_PAGE_IDS[doc_key]
+        data = self._get(f"/pages/{page_id}")
+        self._page_cache[doc_key] = {"id": page_id, "title": data.get("title", "")}
+        return self._page_cache[doc_key]
 
     def get_page_storage(self, page_id: str) -> tuple[str, int, str]:
         """페이지 Storage Format HTML, 버전 번호, 제목을 반환."""

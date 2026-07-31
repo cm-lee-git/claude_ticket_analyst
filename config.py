@@ -19,7 +19,14 @@ JIRA_PROJECTS = ["CCIPRJ", "KCCIVOC", "KEUVOCOP"]
 
 CONFLUENCE_PARENT_PAGE_ID = "68222989"
 
-# 각 문서 페이지 제목 (부분 일치로 탐색)
+# 각 문서 페이지 ID (직접 지정)
+DOC_PAGE_IDS = {
+    "doc1": "70156303",   # 1) KKR OneApp 주간 보고 문서
+    "doc2": "70025250",   # 2) 신규/개선 티켓 스크리닝 및 관리
+    "doc3": "70058046",   # 3) (Kia) 신규/개선 - Global 선별 결과 공유
+}
+
+# 각 문서 페이지 제목 (부분 일치로 탐색, 폴백용)
 DOC_TITLE_KEYWORDS = {
     "doc1": "KKR",
     "doc2": "신규/개선",       # (Kia) 제외
