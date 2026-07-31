@@ -1,29 +1,28 @@
 """
 Document 2: 신규/개선 전체 현황 업데이트
-업데이트 기준:
-  - 티켓 검토: 생성 후 2 영업일 이내
-  - 페이지 업데이트: 검토 완료 후 1 영업일 이내
-  - 스크리닝: 보류 안내일로부터 10 영업일 이내 미보완 시 자동 반려
+
+Confluence 페이지에 아래 마커가 미리 삽입되어 있어야 합니다:
+  <!-- AUTO_SUMMARY_START --> ... <!-- AUTO_SUMMARY_END -->
+  <!-- AUTO_TABLE_START --> ... <!-- AUTO_TABLE_END -->
+  <!-- AUTO_PENDING_START --> ... <!-- AUTO_PENDING_END -->
+  <!-- AUTO_HISTORY_START --> ... <!-- AUTO_HISTORY_END -->  ← 누적 추가(Append)
 """
-from collections import defaultdict
-from lxml import etree
 from confluence_client import ConfluenceClient
 from cycle import cycle_label
-
 
 REGIONS = ["RHQ KR", "RHQ EU", "HQ GBCXD 및 타부문"]
 REGION_MAP = {"KR": "RHQ KR", "EU": "RHQ EU", "HQ": "HQ GBCXD 및 타부문"}
 SCORE_LABELS = {
-    "urgency":               "시급성",
-    "business_performance":  "사업 성과 기여",
-    "customer_experience":   "고객 경험 영향도",
-    "operational_efficiency":"운영 효율화",
-    "global_reach":          "글로벌 파급 범위",
-    "platform_strategy":     "플랫폼 운영 전략 연계도",
+    "urgency":                "시급성",
+    "business_performance":   "사업 성과 기여",
+    "customer_experience":    "고객 경험 영향도",
+    "operational_efficiency": "운영 효율화",
+    "global_reach":           "글로벌 파급 범위",
+    "platform_strategy":      "플랫폼 운영 전략 연계도",
 }
 
 
-def _count(tickets, region=None, approval=None):
+def _cnt(tickets, region=None, approval=None):
     result = tickets
     if region:
         result = [t for t in result if REGION_MAP.get(t.get("region")) == region]
@@ -35,136 +34,82 @@ def _count(tickets, region=None, approval=None):
     return len(result)
 
 
-def _build_summary_table(tickets: list[dict]) -> etree._Element:
-    table = etree.Element("table")
-    tbody = etree.SubElement(table, "tbody")
+def _th(*headers) -> str:
+    return "<tr>" + "".join(f"<th><p>{h}</p></th>" for h in headers) + "</tr>"
 
-    headers = ["구분", "티켓 인입 수", "승인", "반려", "보류"]
-    tr = etree.SubElement(tbody, "tr")
-    for h in headers:
-        th = etree.SubElement(tr, "th")
-        th.text = h
+def _td(*cells) -> str:
+    return "<tr>" + "".join(f"<td><p>{c}</p></td>" for c in cells) + "</tr>"
 
-    rows = [
-        ("Total", None),
-        ("RHQ KR", "RHQ KR"),
-        ("RHQ EU", "RHQ EU"),
-        ("HQ GBCXD 및 타부문", "HQ GBCXD 및 타부문"),
-    ]
-    for label, region in rows:
-        tr = etree.SubElement(tbody, "tr")
-        for val in [
+
+# ── 결과 1: 종합 현황 ──────────────────────────────────────
+def _build_summary_html(tickets: list[dict]) -> str:
+    rows = [_th("구분", "티켓 인입 수", "승인", "반려", "보류")]
+    for label, region in [("Total", None), ("RHQ KR", "RHQ KR"),
+                           ("RHQ EU", "RHQ EU"), ("HQ GBCXD 및 타부문", "HQ GBCXD 및 타부문")]:
+        rows.append(_td(
             label,
-            str(_count(tickets, region)),
-            str(_count(tickets, region, "Approved")),
-            str(_count(tickets, region, "Rejected")),
-            str(_count(tickets, region, ["Pending", "Pre-BRD"])),
-        ]:
-            td = etree.SubElement(tr, "td")
-            td.text = val
-    return table
+            str(_cnt(tickets, region)),
+            str(_cnt(tickets, region, "Approved")),
+            str(_cnt(tickets, region, "Rejected")),
+            str(_cnt(tickets, region, ["Pending", "Pre-BRD"])),
+        ))
+    return f"<table><tbody>{''.join(rows)}</tbody></table>"
 
 
-def _build_cycle_tracking_table(tickets: list[dict]) -> etree._Element:
-    cycles = sorted({t.get("cycle_number", 0) for t in tickets})
-    table = etree.Element("table")
-    tbody = etree.SubElement(table, "tbody")
-
-    headers = ["회차", "구분", "티켓 인입 수", "승인", "반려",
-               "보류중", "승인 전환", "반려 전환"]
-    tr = etree.SubElement(tbody, "tr")
-    for h in headers:
-        th = etree.SubElement(tr, "th")
-        th.text = h
-
-    for cycle_n in cycles:
-        cycle_tickets = [t for t in tickets if t.get("cycle_number") == cycle_n]
-        label = cycle_label(cycle_n)
-        rows_data = [("Total", None)] + [(r, r) for r in REGIONS]
-        for i, (rl, region) in enumerate(rows_data):
-            tr = etree.SubElement(tbody, "tr")
-            if i == 0:
-                td_cycle = etree.SubElement(tr, "td")
-                td_cycle.set("rowspan", str(len(rows_data)))
-                td_cycle.text = label
-            td_region = etree.SubElement(tr, "td")
-            td_region.text = rl
-            for val in [
-                str(_count(cycle_tickets, region)),
-                str(_count(cycle_tickets, region, "Approved")),
-                str(_count(cycle_tickets, region, "Rejected")),
-                str(_count(cycle_tickets, region, "Pending")),
-                "0",  # 승인 전환 (이력 추적 필요 — 현재 스냅샷에선 0)
-                "0",  # 반려 전환
-            ]:
-                td = etree.SubElement(tr, "td")
-                td.text = val
-    return table
-
-
-def _build_basic_info_table(tickets: list[dict]) -> etree._Element:
-    table = etree.Element("table")
-    tbody = etree.SubElement(table, "tbody")
-    tr = etree.SubElement(tbody, "tr")
-    for h in ["회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date"]:
-        th = etree.SubElement(tr, "th")
-        th.text = h
-    for t in tickets:
-        tr = etree.SubElement(tbody, "tr")
-        for val in [
-            cycle_label(t.get("cycle_number", 0)),
-            t.get("key", ""),
-            t.get("summary", ""),
-            t.get("reporter", ""),
-            t.get("created", ""),
-            t.get("due_date", ""),
-        ]:
-            td = etree.SubElement(tr, "td")
-            td.text = val
-    return table
-
-
-def _build_generated_info_table(tickets: list[dict]) -> etree._Element:
-    table = etree.Element("table")
-    tbody = etree.SubElement(table, "tbody")
-    tr = etree.SubElement(tbody, "tr")
-    for h in ["Key", "내용", "항목별 분포", "Priority 점수", "BRD 승인 여부"]:
-        th = etree.SubElement(tr, "th")
-        th.text = h
+# ── 결과 2: 상세 티켓 테이블 (기본 + 분석) ───────────────────
+def _build_table_html(tickets: list[dict]) -> str:
+    rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date",
+                "내용", "항목별 분포", "Priority 점수", "BRD 승인 여부")]
     for t in tickets:
         scores = t.get("scores", {})
-        score_text = " / ".join(
-            f"{lbl}: {scores.get(k, 0)}" for k, lbl in SCORE_LABELS.items()
-        )
+        score_text = " / ".join(f"{lbl}: {scores.get(k, 0)}" for k, lbl in SCORE_LABELS.items())
         content = (
-            f"[Summary] {t.get('summary_ko', t.get('summary', ''))}\n"
-            f"[배경] {t.get('background', '')}\n"
-            f"[문제] {t.get('problem', '')}\n"
+            f"[Summary] {t.get('summary_ko', t.get('summary', ''))} "
+            f"[배경] {t.get('background', '')} "
+            f"[문제] {t.get('problem', '')} "
             f"[기능] {t.get('feature', '')}"
         )
-        tr = etree.SubElement(tbody, "tr")
-        for val in [
-            t.get("key", ""),
-            content,
-            score_text,
-            str(t.get("priority_score", 0)),
-            t.get("brd_approval", ""),
-        ]:
-            td = etree.SubElement(tr, "td")
-            td.text = val
-    return table
+        rows.append(_td(
+            cycle_label(t.get("cycle_number", 0)),
+            t.get("key", ""), t.get("summary", ""), t.get("reporter", ""),
+            t.get("created", ""), t.get("due_date", ""),
+            content, score_text, str(t.get("priority_score", 0)), t.get("brd_approval", ""),
+        ))
+    return f"<table><tbody>{''.join(rows)}</tbody></table>"
 
 
-def _replace_or_append_table(root: etree._Element, keyword: str, new_table: etree._Element, client: ConfluenceClient):
-    tables = client.find_tables(root)
-    existing = client.find_table_by_header(tables, keyword)
-    if existing is not None:
-        parent = existing.getparent()
-        idx = list(parent).index(existing)
-        parent.remove(existing)
-        parent.insert(idx, new_table)
-    else:
-        root.append(new_table)
+# ── 결과 3: 펜딩 티켓 현황 ────────────────────────────────
+def _build_pending_html(tickets: list[dict]) -> str:
+    pending = [t for t in tickets if t.get("brd_approval") == "Pending"]
+    rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date")]
+    for t in pending:
+        rows.append(_td(
+            cycle_label(t.get("cycle_number", 0)),
+            t.get("key", ""), t.get("summary", ""), t.get("reporter", ""),
+            t.get("created", ""), t.get("due_date", ""),
+        ))
+    return f"<table><tbody>{''.join(rows)}</tbody></table>"
+
+
+# ── 결과 4: 히스토리 아카이빙 (Expand Macro, Append) ─────────
+def _build_history_expand_html(tickets: list[dict], cycle_n: int) -> str:
+    label = cycle_label(cycle_n)
+    rows = [_th("구분", "티켓 인입 수", "승인", "반려", "보류")]
+    for rl, region in [("Total", None)] + [(r, r) for r in REGIONS]:
+        rows.append(_td(
+            rl,
+            str(_cnt(tickets, region)),
+            str(_cnt(tickets, region, "Approved")),
+            str(_cnt(tickets, region, "Rejected")),
+            str(_cnt(tickets, region, ["Pending", "Pre-BRD"])),
+        ))
+    table = f"<table><tbody>{''.join(rows)}</tbody></table>"
+    return (
+        f'<ac:structured-macro ac:name="expand">'
+        f'<ac:parameter ac:name="title">{label} 마감 현황</ac:parameter>'
+        f'<ac:rich-text-body>{table}</ac:rich-text-body>'
+        f'</ac:structured-macro>'
+    )
 
 
 def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = None):
@@ -173,21 +118,18 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     page = client.find_page("doc2")
     page_id = page["id"]
-    xml, version, title = client.get_page_storage(page_id)
-    root = client.parse_xml(xml)
+    html, version, title = client.get_page_storage(page_id)
 
-    # A) 종합 현황 표
-    _replace_or_append_table(root, "티켓 인입 수", _build_summary_table(tickets_with_analysis), client)
+    current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
 
-    # A) 회차별 트래킹 현황 표
-    _replace_or_append_table(root, "회차", _build_cycle_tracking_table(tickets_with_analysis), client)
+    # 결과 1·2·3: 덮어쓰기(Replace)
+    html = client.replace_section(html, "AUTO_SUMMARY", _build_summary_html(tickets_with_analysis))
+    html = client.replace_section(html, "AUTO_TABLE",   _build_table_html(tickets_with_analysis))
+    html = client.replace_section(html, "AUTO_PENDING", _build_pending_html(tickets_with_analysis))
 
-    # B) 기본 티켓 정보 표
-    _replace_or_append_table(root, "Ticket Summary", _build_basic_info_table(tickets_with_analysis), client)
+    # 결과 4: 히스토리 누적 추가(Append)
+    html = client.append_to_section(html, "AUTO_HISTORY",
+                                    _build_history_expand_html(tickets_with_analysis, current_cycle))
 
-    # C) 신규 생성 정보 표
-    _replace_or_append_table(root, "항목별 분포", _build_generated_info_table(tickets_with_analysis), client)
-
-    new_xml = client.serialize_xml(root)
-    client.update_page(page_id, title, new_xml, version, "Doc2 현황 업데이트")
-    print(f"[Doc2] 업데이트 완료 — 총 {len(tickets_with_analysis)}건")
+    client.update_page(page_id, title, html, version, "Doc2 현황 업데이트")
+    print(f"[Doc2] 완료 — 총 {len(tickets_with_analysis)}건")

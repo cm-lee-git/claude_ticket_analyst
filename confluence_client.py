@@ -1,6 +1,6 @@
+import re
 import requests
 from requests.auth import HTTPBasicAuth
-from lxml import etree
 from config import ATLASSIAN_BASE_URL, ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN, CONFLUENCE_PARENT_PAGE_ID, DOC_TITLE_KEYWORDS
 
 
@@ -34,7 +34,6 @@ class ConfluenceClient:
         for page in children:
             title = page.get("title", "")
             if doc_key == "doc2":
-                # "(Kia) 신규/개선" 제외, "신규/개선" 포함
                 if keyword in title and "(Kia)" not in title:
                     self._page_cache[doc_key] = page
                     return page
@@ -45,71 +44,48 @@ class ConfluenceClient:
         raise ValueError(f"페이지를 찾을 수 없음: {doc_key} (keyword='{keyword}')")
 
     def get_page_storage(self, page_id: str) -> tuple[str, int, str]:
-        """페이지 storage XML, 버전 번호, 제목을 반환."""
+        """페이지 Storage Format HTML, 버전 번호, 제목을 반환."""
         data = self._get(f"/pages/{page_id}", params={"body-format": "storage"})
-        xml = data["body"]["storage"]["value"]
+        html = data["body"]["storage"]["value"]
         version = data["version"]["number"]
         title = data["title"]
-        return xml, version, title
+        return html, version, title
 
-    def update_page(self, page_id: str, title: str, new_xml: str, version: int, message: str = "Automated update") -> dict:
+    def update_page(self, page_id: str, title: str, new_html: str, version: int, message: str = "Automated update") -> dict:
         return self._put(f"/pages/{page_id}", {
             "id": page_id,
             "status": "current",
             "title": title,
-            "body": {"representation": "storage", "value": new_xml},
+            "body": {"representation": "storage", "value": new_html},
             "version": {"number": version + 1, "message": message},
         })
 
     # ──────────────────────────────────────────────
-    # XML / 표 조작 유틸
+    # Placeholder 기반 구역 교체 (Step 3 핵심 로직)
     # ──────────────────────────────────────────────
 
     @staticmethod
-    def parse_xml(xml: str) -> etree._Element:
-        parser = etree.XMLParser(recover=True)
-        return etree.fromstring(f"<root>{xml}</root>".encode(), parser)
+    def replace_section(html: str, marker: str, new_content: str) -> str:
+        """<!-- MARKER_START --> ~ <!-- MARKER_END --> 사이를 new_content로 덮어씁니다."""
+        pattern = rf'(<!-- {marker}_START -->).*?(<!-- {marker}_END -->)'
+        replacement = rf'\1\n{new_content}\n\2'
+        result = re.sub(pattern, replacement, html, flags=re.DOTALL)
+        if result == html:
+            raise ValueError(
+                f"마커 '{marker}_START / {marker}_END'를 페이지에서 찾을 수 없습니다.\n"
+                f"Confluence 페이지 편집기에서 해당 마커가 삽입되어 있는지 확인하세요."
+            )
+        return result
 
     @staticmethod
-    def serialize_xml(root: etree._Element) -> str:
-        inner = b"".join(etree.tostring(child, encoding="unicode").encode() for child in root)
-        return inner.decode()
-
-    @staticmethod
-    def find_tables(root: etree._Element) -> list[etree._Element]:
-        return root.findall(".//table")
-
-    @staticmethod
-    def get_cell_text(cell: etree._Element) -> str:
-        return "".join(cell.itertext()).strip()
-
-    @staticmethod
-    def set_cell_text(cell: etree._Element, text: str):
-        """셀의 모든 자식 제거 후 텍스트로 교체. 병합 셀 속성은 유지."""
-        # 기존 자식 제거
-        for child in list(cell):
-            cell.remove(child)
-        cell.text = None
-        # <p> 태그로 감싸서 삽입 (Confluence 표준)
-        p = etree.SubElement(cell, "p")
-        p.text = text
-
-    @staticmethod
-    def append_row(tbody: etree._Element, cells: list[str], tag: str = "td"):
-        tr = etree.SubElement(tbody, "tr")
-        for text in cells:
-            cell = etree.SubElement(tr, tag)
-            p = etree.SubElement(cell, "p")
-            p.text = text
-        return tr
-
-    @staticmethod
-    def find_table_by_header(tables: list[etree._Element], header_keyword: str) -> etree._Element | None:
-        """첫 번째 행(헤더)에 keyword가 포함된 표를 반환."""
-        for table in tables:
-            first_row = table.find(".//tr")
-            if first_row is not None:
-                row_text = "".join(first_row.itertext())
-                if header_keyword in row_text:
-                    return table
-        return None
+    def append_to_section(html: str, marker: str, new_content: str) -> str:
+        """<!-- MARKER_START --> ~ <!-- MARKER_END --> 사이의 기존 내용 끝에 new_content를 추가합니다 (히스토리 누적용)."""
+        pattern = rf'(<!-- {marker}_START -->.*?)(<!-- {marker}_END -->)'
+        replacement = rf'\1{new_content}\n\2'
+        result = re.sub(pattern, replacement, html, flags=re.DOTALL)
+        if result == html:
+            raise ValueError(
+                f"마커 '{marker}_START / {marker}_END'를 페이지에서 찾을 수 없습니다.\n"
+                f"Confluence 페이지 편집기에서 해당 마커가 삽입되어 있는지 확인하세요."
+            )
+        return result

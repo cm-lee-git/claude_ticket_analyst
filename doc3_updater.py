@@ -1,72 +1,49 @@
 """
 Document 3: (Kia) 신규/개선 업데이트
-업데이트 기준:
-  - 티켓 검토: 생성 후 2 영업일 이내
-  - 페이지 업데이트: 검토 완료 후 1 영업일 이내
+
+Confluence 페이지에 아래 마커가 미리 삽입되어 있어야 합니다:
+  <!-- AUTO_BASIC_START --> ... <!-- AUTO_BASIC_END -->
+  <!-- AUTO_SCORING_START --> ... <!-- AUTO_SCORING_END -->
 """
-from lxml import etree
 from confluence_client import ConfluenceClient
 
-
 SCORE_LABELS = {
-    "urgency":               "시급성",
-    "business_performance":  "사업 성과 기여",
-    "customer_experience":   "고객 경험 영향도",
-    "operational_efficiency":"운영 효율화",
-    "global_reach":          "글로벌 파급 범위",
-    "platform_strategy":     "플랫폼 운영 전략 연계도",
+    "urgency":                "시급성",
+    "business_performance":   "사업 성과 기여",
+    "customer_experience":    "고객 경험 영향도",
+    "operational_efficiency": "운영 효율화",
+    "global_reach":           "글로벌 파급 범위",
+    "platform_strategy":      "플랫폼 운영 전략 연계도",
 }
 
 
-def _build_basic_table(tickets: list[dict]) -> etree._Element:
-    table = etree.Element("table")
-    tbody = etree.SubElement(table, "tbody")
-    tr = etree.SubElement(tbody, "tr")
-    for h in ["Target", "Ticket Number", "Ticket Summary", "Reporter", "Created", "Due Date"]:
-        th = etree.SubElement(tr, "th")
-        th.text = h
+def _th(*headers) -> str:
+    return "<tr>" + "".join(f"<th><p>{h}</p></th>" for h in headers) + "</tr>"
+
+def _td(*cells) -> str:
+    return "<tr>" + "".join(f"<td><p>{c}</p></td>" for c in cells) + "</tr>"
+
+
+def _build_basic_html(tickets: list[dict]) -> str:
+    rows = [_th("Target", "Ticket Number", "Ticket Summary", "Reporter", "Created", "Due Date")]
     for t in tickets:
-        tr = etree.SubElement(tbody, "tr")
-        for val in [
-            t.get("region", ""),
-            t.get("key", ""),
-            t.get("summary", ""),
-            t.get("reporter", ""),
-            t.get("created", ""),
-            t.get("due_date", ""),
-        ]:
-            td = etree.SubElement(tr, "td")
-            td.text = val
-    return table
+        rows.append(_td(
+            t.get("region", ""), t.get("key", ""), t.get("summary", ""),
+            t.get("reporter", ""), t.get("created", ""), t.get("due_date", ""),
+        ))
+    return f"<table><tbody>{''.join(rows)}</tbody></table>"
 
 
-def _build_scoring_table(tickets: list[dict]) -> etree._Element:
-    table = etree.Element("table")
-    tbody = etree.SubElement(table, "tbody")
-    tr = etree.SubElement(tbody, "tr")
-    for h in ["Key"] + list(SCORE_LABELS.values()) + ["Priority 점수"]:
-        th = etree.SubElement(tr, "th")
-        th.text = h
+def _build_scoring_html(tickets: list[dict]) -> str:
+    rows = [_th("Key", *SCORE_LABELS.values(), "Priority 점수")]
     for t in tickets:
         scores = t.get("scores", {})
-        tr = etree.SubElement(tbody, "tr")
-        vals = [t.get("key", "")] + [str(scores.get(k, 0)) for k in SCORE_LABELS] + [str(t.get("priority_score", 0))]
-        for val in vals:
-            td = etree.SubElement(tr, "td")
-            td.text = val
-    return table
-
-
-def _replace_or_append_table(root: etree._Element, keyword: str, new_table: etree._Element, client: ConfluenceClient):
-    tables = client.find_tables(root)
-    existing = client.find_table_by_header(tables, keyword)
-    if existing is not None:
-        parent = existing.getparent()
-        idx = list(parent).index(existing)
-        parent.remove(existing)
-        parent.insert(idx, new_table)
-    else:
-        root.append(new_table)
+        rows.append(_td(
+            t.get("key", ""),
+            *[str(scores.get(k, 0)) for k in SCORE_LABELS],
+            str(t.get("priority_score", 0)),
+        ))
+    return f"<table><tbody>{''.join(rows)}</tbody></table>"
 
 
 def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = None):
@@ -75,15 +52,10 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     page = client.find_page("doc3")
     page_id = page["id"]
-    xml, version, title = client.get_page_storage(page_id)
-    root = client.parse_xml(xml)
+    html, version, title = client.get_page_storage(page_id)
 
-    # A) 기본 티켓 정보
-    _replace_or_append_table(root, "Ticket Number", _build_basic_table(tickets_with_analysis), client)
+    html = client.replace_section(html, "AUTO_BASIC",   _build_basic_html(tickets_with_analysis))
+    html = client.replace_section(html, "AUTO_SCORING", _build_scoring_html(tickets_with_analysis))
 
-    # B) Scoring
-    _replace_or_append_table(root, "시급성", _build_scoring_table(tickets_with_analysis), client)
-
-    new_xml = client.serialize_xml(root)
-    client.update_page(page_id, title, new_xml, version, "Doc3 업데이트")
-    print(f"[Doc3] 업데이트 완료 — 총 {len(tickets_with_analysis)}건")
+    client.update_page(page_id, title, html, version, "Doc3 업데이트")
+    print(f"[Doc3] 완료 — 총 {len(tickets_with_analysis)}건")
