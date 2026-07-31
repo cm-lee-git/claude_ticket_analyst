@@ -23,20 +23,24 @@ jobs:
 
       - name: Doc2 업데이트
         env:
-          ATLASSIAN_EMAIL:      ${{ secrets.ATLASSIAN_EMAIL }}
-          ATLASSIAN_API_TOKEN:  ${{ secrets.ATLASSIAN_API_TOKEN }}
-          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
-          JIRA_FIELD_COUNTRY:   ${{ secrets.JIRA_FIELD_COUNTRY }}
-          JIRA_FIELD_BRD_STATUS:${{ secrets.JIRA_FIELD_BRD_STATUS }}
+          JIRA_EMAIL:              ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN:          ${{ secrets.JIRA_API_TOKEN }}
+          CONFLUENCE_EMAIL:        ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN:    ${{ secrets.CONFLUENCE_API_TOKEN }}
+          ANTHROPIC_API_KEY:       ${{ secrets.ANTHROPIC_API_KEY }}
+          JIRA_FIELD_COUNTRY:      ${{ secrets.JIRA_FIELD_COUNTRY }}
+          JIRA_FIELD_BRD_STATUS:   ${{ secrets.JIRA_FIELD_BRD_STATUS }}
           JIRA_FIELD_FEATURE_TYPE: ${{ secrets.JIRA_FIELD_FEATURE_TYPE }}
         run: python main.py --doc2
 
       - name: Doc3 업데이트
         env:
-          ATLASSIAN_EMAIL:      ${{ secrets.ATLASSIAN_EMAIL }}
-          ATLASSIAN_API_TOKEN:  ${{ secrets.ATLASSIAN_API_TOKEN }}
-          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
-          JIRA_FIELD_COUNTRY:   ${{ secrets.JIRA_FIELD_COUNTRY }}
-          JIRA_FIELD_BRD_STATUS:${{ secrets.JIRA_FIELD_BRD_STATUS }}
+          JIRA_EMAIL:              ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN:          ${{ secrets.JIRA_API_TOKEN }}
+          CONFLUENCE_EMAIL:        ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN:    ${{ secrets.CONFLUENCE_API_TOKEN }}
+          ANTHROPIC_API_KEY:       ${{ secrets.ANTHROPIC_API_KEY }}
+          JIRA_FIELD_COUNTRY:      ${{ secrets.JIRA_FIELD_COUNTRY }}
+          JIRA_FIELD_BRD_STATUS:   ${{ secrets.JIRA_FIELD_BRD_STATUS }}
           JIRA_FIELD_FEATURE_TYPE: ${{ secrets.JIRA_FIELD_FEATURE_TYPE }}
         run: python main.py --doc3

@@ -1,13 +1,13 @@
 import re
 import requests
 from requests.auth import HTTPBasicAuth
-from config import ATLASSIAN_BASE_URL, ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN, CONFLUENCE_PARENT_PAGE_ID, DOC_TITLE_KEYWORDS
+from config import CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN, CONFLUENCE_PARENT_PAGE_ID, DOC_TITLE_KEYWORDS
 
 
 class ConfluenceClient:
     def __init__(self):
-        self.base = f"{ATLASSIAN_BASE_URL}/wiki/api/v2"
-        self.auth = HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN)
+        self.base = f"{CONFLUENCE_BASE_URL}/wiki/api/v2"
+        self.auth = HTTPBasicAuth(CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN)
         self.headers = {"Accept": "application/json", "Content-Type": "application/json"}
         self._page_cache: dict[str, dict] = {}
 

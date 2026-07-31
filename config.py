@@ -3,9 +3,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ATLASSIAN_BASE_URL = "https://ihqdf.atlassian.net"
-ATLASSIAN_EMAIL = os.getenv("ATLASSIAN_EMAIL")
-ATLASSIAN_API_TOKEN = os.getenv("ATLASSIAN_API_TOKEN")
+# Jira: HMG (현대자동차그룹) 인스턴스
+JIRA_BASE_URL = "https://hmg.atlassian.net"
+JIRA_EMAIL = os.getenv("JIRA_EMAIL")
+JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
+
+# Confluence: IHQDF (이노션) 인스턴스
+CONFLUENCE_BASE_URL = "https://ihqdf.atlassian.net"
+CONFLUENCE_EMAIL = os.getenv("CONFLUENCE_EMAIL")
+CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN")
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 JIRA_PROJECTS = ["CCIPRJ", "KCCIVOC", "KEUVOCOP"]

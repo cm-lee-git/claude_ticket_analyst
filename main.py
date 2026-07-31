@@ -12,7 +12,7 @@ import argparse
 import sys
 from datetime import date
 
-from config import ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN, ANTHROPIC_API_KEY
+from config import JIRA_EMAIL, JIRA_API_TOKEN, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN, ANTHROPIC_API_KEY
 from cycle import get_cycle_number
 from jira_client import JiraClient
 from confluence_client import ConfluenceClient
@@ -24,10 +24,14 @@ import doc3_updater
 
 def _check_env():
     missing = []
-    if not ATLASSIAN_EMAIL:
-        missing.append("ATLASSIAN_EMAIL")
-    if not ATLASSIAN_API_TOKEN:
-        missing.append("ATLASSIAN_API_TOKEN")
+    if not JIRA_EMAIL:
+        missing.append("JIRA_EMAIL")
+    if not JIRA_API_TOKEN:
+        missing.append("JIRA_API_TOKEN")
+    if not CONFLUENCE_EMAIL:
+        missing.append("CONFLUENCE_EMAIL")
+    if not CONFLUENCE_API_TOKEN:
+        missing.append("CONFLUENCE_API_TOKEN")
     if not ANTHROPIC_API_KEY:
         missing.append("ANTHROPIC_API_KEY")
     if missing:

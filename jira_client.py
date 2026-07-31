@@ -1,12 +1,12 @@
 import requests
 from requests.auth import HTTPBasicAuth
-from config import ATLASSIAN_BASE_URL, ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN, JIRA_PROJECTS, JIRA_FIELDS, BRD_STATUS_MAP, EU_COUNTRIES
+from config import JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS, JIRA_FIELDS, BRD_STATUS_MAP, EU_COUNTRIES
 
 
 class JiraClient:
     def __init__(self):
-        self.base = f"{ATLASSIAN_BASE_URL}/rest/api/3"
-        self.auth = HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN)
+        self.base = f"{JIRA_BASE_URL}/rest/api/3"
+        self.auth = HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN)
         self.headers = {"Accept": "application/json"}
 
     def _get(self, path: str, params: dict = None) -> dict:
