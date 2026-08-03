@@ -20,7 +20,8 @@ Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명
   "summary_ko": "티켓 상태 및 간략 정보 (한국어, 2~3문장)",
   "background": "배경 (한국어)",
   "problem": "문제 (한국어)",
-  "feature": "기능 개선 또는 신규 기능 (한국어)",
+  "feature_label": "기존 기능 개선 또는 신규 기능 중 하나",
+  "feature": "해당 기능의 상세 내용 (한국어)",
   "scores": {
     "urgency": 0,
     "business_performance": 0,
@@ -94,6 +95,7 @@ def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
                 "summary_ko": "",
                 "background": "",
                 "problem": "",
+                "feature_label": "기존 기능 개선",
                 "feature": "",
                 "scores": {k: 0 for k in SCORE_WEIGHTS},
                 "priority_score": 0.0,

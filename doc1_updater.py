@@ -19,6 +19,31 @@ SCORE_KEYS = [
 ]
 
 
+def _fill_content_cell(cell: Tag, ticket: dict, soup: BeautifulSoup):
+    """내용 셀을 <Summary>/<배경>/<문제>/<기능> 형식으로 채움."""
+    for child in list(cell.children):
+        child.extract()
+
+    feature_label = ticket.get('feature_label') or '기존 기능 개선'
+    sections = [
+        ('Summary',      ticket.get('summary_ko') or ticket.get('summary', '')),
+        ('배경',         ticket.get('background', '')),
+        ('문제',         ticket.get('problem', '')),
+        (feature_label,  ticket.get('feature', '')),
+    ]
+    for label, content in sections:
+        if content:
+            p_label = soup.new_tag('p')
+            strong = soup.new_tag('strong')
+            strong.string = f'<{label}>'
+            p_label.append(strong)
+            cell.append(p_label)
+
+            p_content = soup.new_tag('p')
+            p_content.string = content
+            cell.append(p_content)
+
+
 def _find_ticket_key_in_row(row: Tag) -> str:
     """행의 Key 컬럼(인덱스2) 텍스트 반환."""
     cells = row.find_all(['td', 'th'])
@@ -69,21 +94,9 @@ def _update_ticket_row(first_row: Tag, ticket: dict, soup: BeautifulSoup):
     set_cell(4, ticket.get('reporter', ''))
     set_cell(5, ticket.get('created', ''))
     set_cell(6, ticket.get('due_date', ''))
-    # 내용 셀: summary_ko + 배경 + 문제 + 기능 (multi-paragraph)
+    # 내용 셀 업데이트
     if 7 < len(cells):
-        content_cell = cells[7]
-        for c in list(content_cell.children):
-            c.extract()
-        for label, val in [
-            ('[요약]', ticket.get('summary_ko') or ticket.get('summary', '')),
-            ('[배경]', ticket.get('background', '')),
-            ('[문제]', ticket.get('problem', '')),
-            ('[기능]', ticket.get('feature', '')),
-        ]:
-            if val:
-                p = soup.new_tag('p')
-                p.string = f"{label} {val}"
-                content_cell.append(p)
+        _fill_content_cell(cells[7], ticket, soup)
     set_cell(9, str(scores.get(SCORE_KEYS[0], '')))  # 시급성 점수
     set_cell(10, str(ticket.get('priority_score', '')))
     set_cell(11, ticket.get('brd_approval', '') if ticket.get('brd_approval') != 'Pre-BRD' else '')
@@ -131,19 +144,10 @@ def _build_ticket_block(soup: BeautifulSoup, ticket: dict, seq_num: int,
     tr1.append(td(ticket.get('reporter', ''), rowspan=6))       # Reporter
     tr1.append(td(ticket.get('created', ''), rowspan=6))        # Created
     tr1.append(td(ticket.get('due_date', ''), rowspan=6))       # Due date
-    # 내용 셀: summary_ko + 배경 + 문제 + 기능 (multi-paragraph)
+    # 내용 셀
     content_td = soup.new_tag('td')
     content_td['rowspan'] = '6'
-    for label, val in [
-        ('[요약]', ticket.get('summary_ko') or ticket.get('summary', '')),
-        ('[배경]', ticket.get('background', '')),
-        ('[문제]', ticket.get('problem', '')),
-        ('[기능]', ticket.get('feature', '')),
-    ]:
-        if val:
-            p = soup.new_tag('p')
-            p.string = f"{label} {val}"
-            content_td.append(p)
+    _fill_content_cell(content_td, ticket, soup)
     tr1.append(content_td)
     tr1.append(td(SCORE_LABELS[0]))                             # 시급성 레이블
     tr1.append(td(scores.get(SCORE_KEYS[0], '')))               # 시급성 점수
