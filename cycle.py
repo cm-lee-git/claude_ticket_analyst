@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-ANCHOR = date(2025, 6, 8)  # 1회차 시작일 (월요일)
+ANCHOR = date(2026, 6, 8)  # 1회차 시작일 (월요일)
 
 
 def _business_days_between(start: date, n: int, holidays: list[date]) -> date:
@@ -19,7 +19,7 @@ def get_cycle_bounds(n: int, holidays: list[date] | None = None) -> tuple[date, 
     if holidays is None:
         holidays = []
     start = ANCHOR + timedelta(days=(n - 1) * 14)
-    end = _business_days_between(start, 10, holidays)
+    end = _business_days_between(start, 9, holidays)  # start 포함 10 영업일
     return start, end
 
 
