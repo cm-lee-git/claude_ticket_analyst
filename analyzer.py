@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """당신은 INNOCEAN GBCXD팀의 CCI Digital Platform 티켓 �
 Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명이나 마크다운은 절대 포함하지 마세요.
 
 {
-  "summary": "티켓 상태 및 간략 정보 (한국어, 2~3문장)",
+  "summary_ko": "티켓 상태 및 간략 정보 (한국어, 2~3문장)",
   "background": "배경 (한국어)",
   "problem": "문제 (한국어)",
   "feature": "기능 개선 또는 신규 기능 (한국어)",
@@ -73,6 +73,9 @@ BRD 상태: {ticket['brd_status_raw']}
     scores = parsed.get("scores", {})
     priority = sum(scores.get(k, 0) * w for k, w in SCORE_WEIGHTS.items())
     parsed["priority_score"] = round(priority, 2)
+    # summary_ko 로 통일 (summary 키가 오면 summary_ko 로 이동)
+    if "summary" in parsed and "summary_ko" not in parsed:
+        parsed["summary_ko"] = parsed.pop("summary")
     return parsed
 
 
@@ -88,7 +91,7 @@ def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
             analysis = analyze_ticket(t)
         except Exception as e:
             analysis = {
-                "summary": f"분석 실패: {e}",
+                "summary_ko": "",
                 "background": "",
                 "problem": "",
                 "feature": "",
