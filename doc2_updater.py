@@ -121,7 +121,7 @@ def _build_cycle_tracking_html(tickets: list[dict], current_cycle: int) -> str:
 # ── 섹션 3: 상세 티켓 테이블 (기본 + 분석) ──────────────────────
 def _build_table_html(tickets: list[dict]) -> str:
     rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date",
-                "내용", "항목별 분포", "Priority 점수", "BRD 승인 여부")]
+                "내용", "항목별 분포", "Priority 점수", "BRD 승인 여부", "유형 코드")]
     for t in tickets:
         scores = t.get("scores", {})
         score_text = " / ".join(
@@ -134,12 +134,13 @@ def _build_table_html(tickets: list[dict]) -> str:
             f"[기능] {t.get('feature', '')}",
         ]
         content = " ".join(p for p in content_parts if not p.endswith("] "))
+        type_code = t.get("hold_code") or t.get("rejection_code") or ""
         rows.append(_td(
             cycle_label(t.get("cycle_number", 0)),
             t.get("key", ""), t.get("summary", ""), t.get("reporter", ""),
             t.get("created", ""), t.get("due_date", ""),
             content, score_text,
-            str(t.get("priority_score", 0)), t.get("brd_approval", ""),
+            str(t.get("priority_score", 0)), t.get("brd_approval", ""), type_code,
         ))
     return f"<table><tbody>{''.join(rows)}</tbody></table>"
 
@@ -147,13 +148,14 @@ def _build_table_html(tickets: list[dict]) -> str:
 # ── 섹션 4: 보류 중 현황 ────────────────────────────────────────
 def _build_pending_html(tickets: list[dict]) -> str:
     pending = [t for t in tickets if t.get("brd_approval") in ("Pending", "Pre-BRD")]
-    rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date", "BRD 상태")]
+    rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date", "BRD 상태", "보류 유형")]
     for t in pending:
+        hold_code = t.get("hold_code") or ""
         rows.append(_td(
             cycle_label(t.get("cycle_number", 0)),
             t.get("key", ""), t.get("summary", ""), t.get("reporter", ""),
             t.get("created", ""), t.get("due_date", ""),
-            t.get("brd_approval", ""),
+            t.get("brd_approval", ""), hold_code,
         ))
     return f"<table><tbody>{''.join(rows)}</tbody></table>"
 

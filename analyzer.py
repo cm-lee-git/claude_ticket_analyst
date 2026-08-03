@@ -22,6 +22,8 @@ Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명
   "problem": "문제 (한국어)",
   "feature_label": "기존 기능 개선 또는 신규 기능 중 하나",
   "feature": "해당 기능의 상세 내용 (한국어)",
+  "hold_code": "보류 시 H1~H5 중 하나, 아니면 null",
+  "rejection_code": "반려 시 R1~R5 중 하나, 아니면 null",
   "scores": {
     "urgency": 0,
     "business_performance": 0,
@@ -69,6 +71,20 @@ Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명
 - 0: 위 해당 없음
 
 Priority 점수 = business_performance + customer_experience + operational_efficiency + global_reach + platform_strategy (합계 0~5, urgency 제외)
+
+### hold_code (BRD 상태가 Pending/보류일 때만 작성, 아니면 null)
+- H1: BRD 필수 항목 미작성 (추진 배경, 기능 목록, IT 연동 등)
+- H2: 작성 항목의 요건 구체성 부족 또는 구현 로직 불명확
+- H3: 스코어링 근거가 추정 수준, 정량 데이터 보완 필요
+- H4: 타 티켓/프로젝트 완료 또는 정책 확정이 선행 필요
+- H5: 위 유형 외 기타 보류 사유
+
+### rejection_code (BRD 상태가 Rejected/반려일 때만 작성, 아니면 null)
+- R1: 시급성 해당 없음 + 5개 평가 항목 합계 0점 (자동 판별)
+- R2: OneApp 플랫폼 운영 범위 외 요청 (타 시스템·채널 소관)
+- R3: 실질적으로 동일한 요건이 이미 진행 중인 티켓 존재
+- R4: 글로벌 BPM 방향성 또는 리더십 결정 사항과 배치
+- R5: 위 유형 외 기타 반려 사유
 """
 
 
@@ -101,8 +117,14 @@ BRD 상태: {ticket['brd_status_raw']}
         parsed = json.loads(raw[start:end])
 
     scores = parsed.get("scores", {})
-    # Priority = 5개 항목 합산 (urgency 제외), 각 0 또는 1
-    parsed["priority_score"] = int(sum(scores.get(k, 0) for k in SCORE_KEYS_FOR_PRIORITY))
+    priority = int(sum(scores.get(k, 0) for k in SCORE_KEYS_FOR_PRIORITY))
+    parsed["priority_score"] = priority
+
+    # R1 자동 판별: urgency=0 AND priority_score=0 → rejection_code 강제 R1
+    if (parsed.get("rejection_code") is None and
+            scores.get("urgency", 0) == 0 and priority == 0 and
+            ticket.get("brd_approval") == "Rejected"):
+        parsed["rejection_code"] = "R1"
 
     if "summary" in parsed and "summary_ko" not in parsed:
         parsed["summary_ko"] = parsed.pop("summary")
@@ -125,6 +147,8 @@ def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
                 "problem": "",
                 "feature_label": "기존 기능 개선",
                 "feature": "",
+                "hold_code": None,
+                "rejection_code": None,
                 "scores": {k: 0 for k in ["urgency"] + SCORE_KEYS_FOR_PRIORITY},
                 "priority_score": 0,
             }
