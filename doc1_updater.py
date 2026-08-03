@@ -69,7 +69,21 @@ def _update_ticket_row(first_row: Tag, ticket: dict, soup: BeautifulSoup):
     set_cell(4, ticket.get('reporter', ''))
     set_cell(5, ticket.get('created', ''))
     set_cell(6, ticket.get('due_date', ''))
-    set_cell(7, ticket.get('summary', ''))  # 내용
+    # 내용 셀: summary_ko + 배경 + 문제 + 기능 (multi-paragraph)
+    if 7 < len(cells):
+        content_cell = cells[7]
+        for c in list(content_cell.children):
+            c.extract()
+        for label, val in [
+            ('[요약]', ticket.get('summary_ko') or ticket.get('summary', '')),
+            ('[배경]', ticket.get('background', '')),
+            ('[문제]', ticket.get('problem', '')),
+            ('[기능]', ticket.get('feature', '')),
+        ]:
+            if val:
+                p = soup.new_tag('p')
+                p.string = f"{label} {val}"
+                content_cell.append(p)
     set_cell(9, str(scores.get(SCORE_KEYS[0], '')))  # 시급성 점수
     set_cell(10, str(ticket.get('priority_score', '')))
     set_cell(11, ticket.get('brd_approval', '') if ticket.get('brd_approval') != 'Pre-BRD' else '')
@@ -117,7 +131,20 @@ def _build_ticket_block(soup: BeautifulSoup, ticket: dict, seq_num: int,
     tr1.append(td(ticket.get('reporter', ''), rowspan=6))       # Reporter
     tr1.append(td(ticket.get('created', ''), rowspan=6))        # Created
     tr1.append(td(ticket.get('due_date', ''), rowspan=6))       # Due date
-    tr1.append(td(ticket.get('summary', ''), rowspan=6))        # 내용
+    # 내용 셀: summary_ko + 배경 + 문제 + 기능 (multi-paragraph)
+    content_td = soup.new_tag('td')
+    content_td['rowspan'] = '6'
+    for label, val in [
+        ('[요약]', ticket.get('summary_ko') or ticket.get('summary', '')),
+        ('[배경]', ticket.get('background', '')),
+        ('[문제]', ticket.get('problem', '')),
+        ('[기능]', ticket.get('feature', '')),
+    ]:
+        if val:
+            p = soup.new_tag('p')
+            p.string = f"{label} {val}"
+            content_td.append(p)
+    tr1.append(content_td)
     tr1.append(td(SCORE_LABELS[0]))                             # 시급성 레이블
     tr1.append(td(scores.get(SCORE_KEYS[0], '')))               # 시급성 점수
     tr1.append(td(ticket.get('priority_score', ''), rowspan=6)) # Priority
@@ -245,4 +272,4 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     new_html = str(soup)
     client.update_page(page_id, title, new_html, version, "Doc1 Smart Update")
-    print(f"[Doc1] 완료 — Pre-BRD: {len(pre_brd)}건 / Post-BRD: {len(post_brd)}건")
+    print(f"[Doc1] 완료  Pre-BRD: {len(pre_brd)}건 / Post-BRD: {len(post_brd)}건")

@@ -198,4 +198,4 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     new_html = str(soup)
     client.update_page(page_id, title, new_html, version, "Doc3 Smart Update")
-    print(f"[Doc3] 완료 — 총 {len(tickets_with_analysis)}건")
+    print(f"[Doc3] 완료  총 {len(tickets_with_analysis)}건")
