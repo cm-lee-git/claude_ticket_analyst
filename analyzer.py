@@ -1,6 +1,6 @@
 import json
 import anthropic
-from config import ANTHROPIC_API_KEY, SCORE_WEIGHTS
+from config import ANTHROPIC_API_KEY, SCORE_KEYS_FOR_PRIORITY
 from jira_client import JiraClient
 
 _client = None
@@ -32,54 +32,48 @@ Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명
   }
 }
 
-점수 기준:
+## 점수 기준
 
-[urgency] 0 또는 1만 사용 (Fast Track 분류용 이진값)
-- 1(O): 아래 중 하나라도 해당
+### urgency (0 또는 1, Fast Track 분류용 — Priority 점수 합산 제외)
+- 1: 아래 중 하나라도 해당
   - 대규모 장애 / Critical Bug: 핵심 고객 여정 사용 불가 또는 심각한 성능 저하
   - 법규 대응: GDPR 등 법적 리스크, 과징금, 감사 이슈
   - 리더십 결정: C-Level 지시, MBO 과제로 지정
-- 0(X): 위 기준 해당 없음
+- 0: 위 해당 없음
 
-[business_performance] 0~5점
-- 0: 사업 성과와 무관
-- 1~2: 간접 기여 (사용성 개선 등, 수치 근거 없음)
-- 3~4: 직접적 전환율/리드 영향 명시 (수치 근거 있음)
-- 5: 핵심 전환 Funnel 직접 영향 + 경쟁사 기회 손실 + 명확한 수치 근거
-  (예: 전환율 xx% 향상, 월 xx건 리드 증가, 경쟁사 동일 기능 비교 손실)
+### business_performance (0 또는 1)
+- 1: 리드 확보, 전환율, 계약/구매 유도 등 비즈니스 성과에 직접 영향
+  (예: 전환율 xx% 향상, 월 xx건 리드 증가, 경쟁사 기회 손실 xx건)
+- 0: 위 해당 없음
 
-[customer_experience] 0~5점
-- 0: 고객 경험과 무관
-- 1~2: 소수 고객 불편, 우회 가능, VoC 미미
-- 3~4: 반복적 VoC 또는 행동 데이터로 확인된 불편 (CS 인입 건수, 이탈률 등 근거)
-- 5: 핵심 여정 구조적 이탈/실패 + 명확한 CS/데이터 근거 + 재사용율/신뢰도 영향
+### customer_experience (0 또는 1)
+- 1: 반복적 VoC 또는 행동 데이터로 확인된 고객 불편 / 핵심 여정 이탈·혼선
   (예: CS 인입 월 xxx건, 재문의율 34%, 이탈 단계 특정)
-[operational_efficiency] 0~5점
-- 0: 운영 효율화와 무관
-- 1~2: 소규모 반복 작업, 수치 근거 없음
-- 3~4: 수동 작업량 또는 비용 데이터 명시 (시간·비용 수치 있음)
-- 5: 대규모 인력/시간 절감 + 품질 리스크 해소 + 비용 절감 수치 모두 구체적
-  (예: 월 xxx시간 소요, 오류율 12%, 계약 비용 연 xxx만원 절감)
-[global_reach] 0~5점 (두 조건 동시 충족 필요)
-- 0: 단일 국가 적용 또는 MAU 2M 미만 (단일 국가 권역은 0점)
-- 1~2: MAU 2M 이상 또는 수혜 국가 50% 이상 중 하나만 충족
-- 3~4: MAU 2M 이상 + 수혜 국가 50% 이상 (수치 일부 약함)
-- 5: MAU 2M 이상 + 수혜 국가 50% 이상 + 타 기능/서비스 확장 효과 확인
-  (MAU 확인: KR→Looker Studio, EU→Google Analytics)
-[platform_strategy] 0~5점
-- 0: KPI 또는 전략 방향과 무관
-- 1~2: 해당 권역 KPI와 간접 연계
-- 3~4: 권역 KPI 직접 연계 (KPI 갭 수치 또는 BPM 방향성 언급)
-- 5: 권역 KPI 직접 연계 + 글로벌 BPM 과제 연계 + 타 권역 확산 가능성 확인
-  권역별 KPI 기준:
+- 0: 위 해당 없음
+
+### operational_efficiency (0 또는 1)
+- 1: 수기 반복 제거 또는 비용 절감 효과가 확인됨
+  (예: 월 xxx시간 수동 작업 소요, 오류율 12%, 계약 비용 연 xxx만원 절감)
+- 0: 위 해당 없음
+
+### global_reach (0 또는 1, 두 조건 모두 충족해야 1)
+- 1: MAU 2M 이상 AND 권역 내 수혜 국가 비율 50% 이상 동시 충족
+  (단일 국가 요청은 무조건 0, MAU: KR→Looker Studio, EU→Google Analytics)
+- 0: 두 조건 중 하나라도 미충족 또는 단일 국가 요청
+
+### platform_strategy (0 또는 1)
+- 1: 권역 KPI 또는 글로벌 BPM 방향성과 직접 연계
   - KR: 핵심 기능 사용율 (제어/정비/충전/비즈니스 전환율)
   - EU: 앱 다운로드 수 & 가입율
   - Global/HQ: Non-CCS/CCS 표준화 기여
+- 0: 위 해당 없음
+
+Priority 점수 = business_performance + customer_experience + operational_efficiency + global_reach + platform_strategy (합계 0~5, urgency 제외)
 """
 
 
 def analyze_ticket(ticket: dict) -> dict:
-    """티켓 1건을 분석하여 summary, background, problem, feature, scores, priority_score 반환."""
+    """티켓 1건을 분석하여 summary_ko, background, problem, feature, scores, priority_score 반환."""
     user_msg = f"""
 티켓 키: {ticket['key']}
 제목: {ticket['summary']}
@@ -102,15 +96,14 @@ BRD 상태: {ticket['brd_status_raw']}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        # JSON 추출 재시도
         start = raw.find("{")
         end = raw.rfind("}") + 1
         parsed = json.loads(raw[start:end])
 
     scores = parsed.get("scores", {})
-    priority = sum(scores.get(k, 0) * w for k, w in SCORE_WEIGHTS.items())
-    parsed["priority_score"] = round(priority, 2)
-    # summary_ko 로 통일 (summary 키가 오면 summary_ko 로 이동)
+    # Priority = 5개 항목 합산 (urgency 제외), 각 0 또는 1
+    parsed["priority_score"] = int(sum(scores.get(k, 0) for k in SCORE_KEYS_FOR_PRIORITY))
+
     if "summary" in parsed and "summary_ko" not in parsed:
         parsed["summary_ko"] = parsed.pop("summary")
     return parsed
@@ -121,20 +114,19 @@ def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
     jira = JiraClient()
     results = []
     for t in tickets:
-        # description 개별 조회
         if not t.get("description"):
             t["description"] = jira.get_description(t["key"])
         try:
             analysis = analyze_ticket(t)
-        except Exception as e:
+        except Exception:
             analysis = {
                 "summary_ko": "",
                 "background": "",
                 "problem": "",
                 "feature_label": "기존 기능 개선",
                 "feature": "",
-                "scores": {k: 0 for k in SCORE_WEIGHTS},
-                "priority_score": 0.0,
+                "scores": {k: 0 for k in ["urgency"] + SCORE_KEYS_FOR_PRIORITY},
+                "priority_score": 0,
             }
         results.append({**t, **analysis})
     return results

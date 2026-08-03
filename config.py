@@ -61,15 +61,15 @@ BRD_STATUS_MAP = {
     "종료":               "Approved",
 }
 
-# Scoring 가중치
-SCORE_WEIGHTS = {
-    "urgency":               0.25,
-    "business_performance":  0.20,
-    "customer_experience":   0.20,
-    "operational_efficiency":0.15,
-    "global_reach":          0.10,
-    "platform_strategy":     0.10,
-}
+# Priority 점수 산정 대상 항목 (각 0 또는 1, 합산 0~5)
+# 시급성(urgency)은 Fast Track 분류용이며 합산에서 제외
+SCORE_KEYS_FOR_PRIORITY = [
+    "business_performance",
+    "customer_experience",
+    "operational_efficiency",
+    "global_reach",
+    "platform_strategy",
+]
 
 # 지역 분류
 EU_COUNTRIES = {
