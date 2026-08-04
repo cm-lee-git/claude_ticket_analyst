@@ -106,6 +106,9 @@ BRD 상태: {ticket['brd_status_raw']}
 설명:
 {ticket['description']}
 """
+    desc_len = len(ticket.get('description', ''))
+    print(f"  [claude-in]  {ticket['key']}: description={desc_len}자, summary={ticket['summary'][:40]!r}")
+
     client = _get_client()
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -114,6 +117,7 @@ BRD 상태: {ticket['brd_status_raw']}
         messages=[{"role": "user", "content": user_msg}],
     )
     raw = response.content[0].text.strip()
+    print(f"  [claude-out] {ticket['key']}: {raw[:200]!r}")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
