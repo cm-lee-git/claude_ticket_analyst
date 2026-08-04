@@ -143,9 +143,10 @@ def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
     for t in tickets:
         key = t.get("key", "?")
         if not t.get("description"):
+            # search에서 못 가져온 경우 개별 조회로 보완
             t["description"] = jira.get_description(key)
         else:
-            print(f"  [description] {key}: {len(t['description'])}자 (캐시됨)")
+            print(f"  [description] {key}: {len(t['description'])}자 (search에서 수신)")
         try:
             analysis = analyze_ticket(t)
             scores = analysis.get("scores", {})

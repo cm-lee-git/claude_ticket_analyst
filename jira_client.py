@@ -27,30 +27,36 @@ class JiraClient:
         return self._search(jql)
 
     def _search(self, jql: str) -> list[dict]:
-        # description은 /search/jql 미지원 → 개별 티켓 조회로 처리
-        # /search/jql 은 nextPageToken 방식 페이지네이션 사용
+        # GET /search: description 포함 가능, startAt 방식 페이지네이션
         fields = [
             "summary", "reporter", "created", "duedate",
-            "status", "issuetype",
+            "status", "issuetype", "description",
             JIRA_FIELDS["country"],
         ]
         results = []
-        payload = {"jql": jql, "maxResults": 100, "fields": fields}
+        start_at = 0
         while True:
-            r = requests.post(
-                f"{self.base}/search/jql",
+            params = {
+                "jql": jql,
+                "startAt": start_at,
+                "maxResults": 50,
+                "fields": ",".join(fields),
+            }
+            r = requests.get(
+                f"{self.base}/search",
                 auth=self.auth,
-                headers={**self.headers, "Content-Type": "application/json"},
-                json=payload,
+                headers=self.headers,
+                params=params,
             )
             r.raise_for_status()
             data = r.json()
             issues = data.get("issues", [])
             results.extend(issues)
-            next_token = data.get("nextPageToken")
-            if not next_token or not issues:
+            total = data.get("total", 0)
+            start_at += len(issues)
+            if not issues or start_at >= total:
                 break
-            payload = {"jql": jql, "maxResults": 100, "fields": fields, "nextPageToken": next_token}
+        print(f"  [search] 총 {len(results)}/{total}건 조회")
         return [self._normalize(i) for i in results]
 
     def get_description(self, issue_key: str) -> str:
@@ -83,6 +89,8 @@ class JiraClient:
         # Feature type: 표준 issuetype 필드
         feature_type = (f.get("issuetype") or {}).get("name", "")
 
+        description = self._extract_text(f.get("description"))
+        print(f"  [normalize] {issue['key']}: description {len(description)}자")
         return {
             "key":            issue["key"],
             "summary":        f.get("summary", ""),
@@ -90,13 +98,12 @@ class JiraClient:
             "created":        (f.get("created") or "")[:10],
             "due_date":       f.get("duedate") or "",
             "status":         (f.get("status") or {}).get("name", ""),
-            "description":    self._extract_text(f.get("description")),
+            "description":    description,
             "country":        country_raw,
             "region":         self._classify_region(country_raw),
             "brd_status_raw": brd_raw,
             "brd_approval":   BRD_STATUS_MAP.get(brd_raw, "Pre-BRD"),
             "feature_type":   feature_type,
-            "description":    "",  # get_description()으로 별도 조회
         }
 
     @staticmethod
