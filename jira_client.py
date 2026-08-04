@@ -27,35 +27,30 @@ class JiraClient:
         return self._search(jql)
 
     def _search(self, jql: str) -> list[dict]:
-        # GET /search: description 포함 가능, startAt 방식 페이지네이션
+        # POST /search/jql: 현행 Jira Cloud 표준 엔드포인트, nextPageToken 페이지네이션
         fields = [
             "summary", "reporter", "created", "duedate",
             "status", "issuetype", "description",
             JIRA_FIELDS["country"],
         ]
         results = []
-        start_at = 0
+        payload = {"jql": jql, "maxResults": 50, "fields": fields}
         while True:
-            params = {
-                "jql": jql,
-                "startAt": start_at,
-                "maxResults": 50,
-                "fields": ",".join(fields),
-            }
-            r = requests.get(
-                f"{self.base}/search",
+            r = requests.post(
+                f"{self.base}/search/jql",
                 auth=self.auth,
-                headers=self.headers,
-                params=params,
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=payload,
             )
             r.raise_for_status()
             data = r.json()
             issues = data.get("issues", [])
             results.extend(issues)
-            total = data.get("total", 0)
-            start_at += len(issues)
-            if not issues or start_at >= total:
+            next_token = data.get("nextPageToken")
+            if not next_token or not issues:
                 break
+            payload = {"jql": jql, "maxResults": 50, "fields": fields, "nextPageToken": next_token}
+        total = data.get("total", len(results))
         print(f"  [search] 총 {len(results)}/{total}건 조회")
         return [self._normalize(i) for i in results]
 
