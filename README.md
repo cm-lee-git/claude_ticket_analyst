@@ -28,20 +28,23 @@ CCIPRJ, KCCIVOC, KEUVOCOP의 Jira 티켓을 자동으로 분석하고 Confluence
 | Atlassian API Token | [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) → Create API token |
 | Anthropic API Key | [console.anthropic.com](https://console.anthropic.com/settings/keys) → Create Key |
 
-### Step 3. GitHub Secrets 등록
+### Step 3. .env 파일 작성
 
-내 저장소 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+`.env.example`을 복사하여 `.env`를 만들고 아래 항목을 입력합니다:
 
-아래 항목을 하나씩 등록합니다:
+```
+JIRA_EMAIL=...                    # Atlassian 로그인 이메일
+JIRA_API_TOKEN=...                # Atlassian API 토큰
+CONFLUENCE_EMAIL=...              # Atlassian 로그인 이메일 (보통 JIRA_EMAIL과 동일)
+CONFLUENCE_API_TOKEN=...          # Atlassian API 토큰 (보통 JIRA_API_TOKEN과 동일)
+ANTHROPIC_API_KEY=...             # Claude API 키 (사내 h-chat 키 또는 직접 Anthropic 키)
+ANTHROPIC_BASE_URL=...            # h-chat 사용 시 엔드포인트 URL (직접 Anthropic 사용 시 생략)
+JIRA_FIELD_COUNTRY=customfield_XXXXX
+JIRA_FIELD_BRD_STATUS=customfield_XXXXX
+JIRA_FIELD_FEATURE_TYPE=customfield_XXXXX
+```
 
-| Secret 이름 | 설명 |
-|---|---|
-| `ATLASSIAN_EMAIL` | Atlassian 로그인 이메일 |
-| `ATLASSIAN_API_TOKEN` | Step 2에서 발급한 Atlassian API 토큰 |
-| `ANTHROPIC_API_KEY` | Step 2에서 발급한 Anthropic API 키 |
-| `JIRA_FIELD_COUNTRY` | Jira 지역 커스텀 필드 ID (Step 4 참고) |
-| `JIRA_FIELD_BRD_STATUS` | Jira BRD 상태 커스텀 필드 ID (Step 4 참고) |
-| `JIRA_FIELD_FEATURE_TYPE` | Jira 기능 유형 커스텀 필드 ID (Step 4 참고) |
+> **참고**: 이 자동화는 사내 Claude 프록시(h-chat)를 사용합니다. h-chat은 사내망에서만 접근 가능하므로 GitHub Actions 대신 로컬 Windows 작업 스케줄러로 실행합니다.
 
 ### Step 4. Jira 커스텀 필드 ID 확인
 
@@ -67,13 +70,19 @@ python main.py --list-fields
 
 ### Step 5. 동작 확인
 
-내 저장소 → **Actions** 탭 → 워크플로우 선택 → **"Run workflow"** 버튼으로 수동 테스트
+터미널에서 직접 실행해 정상 동작을 확인합니다:
+
+```bash
+python main.py --doc1   # Doc1 즉시 실행
+python main.py --doc2   # Doc2 즉시 실행
+python main.py --doc3   # Doc3 즉시 실행
+```
 
 ---
 
 ## 이후 운영
 
-- **자동 실행**: Secrets만 등록하면 스케줄에 따라 GitHub 서버에서 자동 실행됩니다. 컴퓨터를 켜둘 필요 없습니다.
-- **수동 실행**: Actions 탭 → Run workflow로 언제든 즉시 실행 가능합니다.
-- **로그 확인**: Actions 탭에서 각 실행 결과와 오류 메시지를 확인할 수 있습니다.
-- **무료 한도**: GitHub 무료 계정 기준 월 2,000분 제공. 이 자동화는 월 약 300분 사용합니다.
+- **자동 실행**: Windows 작업 스케줄러(`run_doc1.bat`, `run_doc2_doc3.bat`)로 실행됩니다. **컴퓨터가 켜져 있고 로그인된 상태**여야 합니다.
+- **수동 실행**: 터미널에서 `python main.py --doc1` 등을 직접 실행하거나, GitHub Actions 탭 → Run workflow로도 가능합니다. (단, GitHub Actions는 사내망 접근 불가로 Claude 분석은 동작하지 않으며 Jira 조회까지만 가능할 수 있습니다.)
+- **로그 확인**: `logs/` 폴더에 날짜별 로그 파일이 저장됩니다.
+- **스케줄 변경**: Windows 작업 스케줄러에서 `CCI_Doc1_Weekly`, `CCI_Doc2_Doc3_Daily` 작업을 수정하세요.
