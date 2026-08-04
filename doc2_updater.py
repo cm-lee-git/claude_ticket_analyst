@@ -338,7 +338,7 @@ def _build_section1(tickets, current_cycle):
             _s("KR"), _s("KR","Approved"), _s("KR","Rejected"), _s("KR",["Pending","Pre-BRD"]), _s("KR","Approved"),
             _s("EU"), _s("EU","Approved"), _s("EU","Rejected"), _s("EU",["Pending","Pre-BRD"]), _s("EU","Approved"),
             _s("HQ"), _s("HQ","Approved"), _s("HQ","Rejected"), _s("HQ",["Pending","Pre-BRD"]),
-            _s(), _s(approval="Approved"), _s(approval="Rejected"), _s(approval=["Pending","Pre-BRD"]),
+            _s(), _s(appr="Approved"), _s(appr="Rejected"), _s(appr=["Pending","Pre-BRD"]),
         ))
     tracking_table = _table(CW["section1_tracking"], track_rows)
 
