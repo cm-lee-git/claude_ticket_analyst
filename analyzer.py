@@ -16,12 +16,17 @@ def _get_client() -> anthropic.Anthropic:
 SYSTEM_PROMPT = """당신은 INNOCEAN GBCXD팀의 CCI Digital Platform 티켓 분석 전문가입니다.
 Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명이나 마크다운은 절대 포함하지 마세요.
 
+필드 작성 규칙:
+- summary_ko: 1~2문장 요약 (현재 상태, 핵심 내용 포함)
+- background / problem / feature: 각 핵심 포인트를 개행(\\n)으로 구분하여 2~4개 작성
+  예) "주요 배경 포인트 A\\n주요 배경 포인트 B\\n주요 배경 포인트 C"
+
 {
-  "summary_ko": "티켓 상태 및 간략 정보 (한국어, 2~3문장)",
-  "background": "배경 (한국어)",
-  "problem": "문제 (한국어)",
+  "summary_ko": "티켓 상태 및 간략 정보 (한국어, 1~2문장)",
+  "background": "핵심 배경 포인트1\\n핵심 배경 포인트2 (한국어, \\n 구분)",
+  "problem": "핵심 문제 포인트1\\n핵심 문제 포인트2 (한국어, \\n 구분)",
   "feature_label": "기존 기능 개선 또는 신규 기능 중 하나",
-  "feature": "해당 기능의 상세 내용 (한국어)",
+  "feature": "기능 상세 포인트1\\n기능 상세 포인트2 (한국어, \\n 구분)",
   "hold_code": "보류 시 H1~H5 중 하나, 아니면 null",
   "rejection_code": "반려 시 R1~R5 중 하나, 아니면 null",
   "scores": {
@@ -136,11 +141,18 @@ def analyze_tickets_batch(tickets: list[dict]) -> list[dict]:
     jira = JiraClient()
     results = []
     for t in tickets:
+        key = t.get("key", "?")
         if not t.get("description"):
-            t["description"] = jira.get_description(t["key"])
+            t["description"] = jira.get_description(key)
+        else:
+            print(f"  [description] {key}: {len(t['description'])}자 (캐시됨)")
         try:
             analysis = analyze_ticket(t)
-        except Exception:
+            scores = analysis.get("scores", {})
+            o_count = sum(1 for v in scores.values() if float(v or 0) > 0)
+            print(f"  [분석] {key}: scores O={o_count}/6  priority={analysis.get('priority_score', 0)}")
+        except Exception as e:
+            print(f"  [분석] {key}: 분석 실패 → {e}")
             analysis = {
                 "summary_ko": "",
                 "background": "",

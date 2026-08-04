@@ -57,8 +57,12 @@ class JiraClient:
         """티켓 개별 조회로 description 가져오기."""
         try:
             data = self._get(f"/issue/{issue_key}", params={"fields": "description"})
-            return self._extract_text(data["fields"].get("description"))
-        except Exception:
+            text = self._extract_text(data["fields"].get("description"))
+            chars = len(text)
+            print(f"  [description] {issue_key}: {chars}자 {'OK' if chars > 0 else '⚠ 빈 값'}")
+            return text
+        except Exception as e:
+            print(f"  [description] {issue_key}: 조회 실패 → {e}")
             return ""
 
     def _normalize(self, issue: dict) -> dict:
