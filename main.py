@@ -77,19 +77,19 @@ def cmd_doc1():
 
 def cmd_doc2():
     _check_env()
-    tickets = _fetch_and_analyze()
+    tickets = _fetch_and_analyze(extra_jql='created >= "2026-01-01"')
     doc2_updater.update(tickets, ConfluenceClient())
 
 
 def cmd_doc3():
     _check_env()
-    tickets = _fetch_and_analyze()
+    tickets = _fetch_and_analyze(extra_jql='created >= "2026-01-01"')
     doc3_updater.update(tickets, ConfluenceClient())
 
 
 def cmd_all():
     _check_env()
-    tickets = _fetch_and_analyze()
+    tickets = _fetch_and_analyze(extra_jql='created >= "2026-01-01"')
     client = ConfluenceClient()
     doc1_updater.update(tickets, client)
     doc2_updater.update(tickets, client)
