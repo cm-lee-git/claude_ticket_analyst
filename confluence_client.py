@@ -50,12 +50,13 @@ class ConfluenceClient:
         if page_id:
             for key in ("content-appearance-published", "content-appearance-draft"):
                 try:
-                    self._post_v1(f"/content/{page_id}/property", {
+                    r = self._post_v1(f"/content/{page_id}/property", {
                         "key": key,
-                        "value": {"appearance": "full-width"},
+                        "value": "full-width",
                     })
-                except Exception:
-                    pass
+                    print(f"  [spacing] {key} 설정 성공: {r}")
+                except Exception as e:
+                    print(f"  [spacing] {key} 설정 실패: {e}")
         return result
 
     def get_child_pages(self, parent_id: str = CONFLUENCE_PARENT_PAGE_ID) -> list[dict]:
