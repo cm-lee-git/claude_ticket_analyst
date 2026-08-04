@@ -96,11 +96,13 @@ def _fill_content_cell(cell: Tag, ticket: dict, soup: BeautifulSoup):
         cell.append(ul)
 
 
-def _section_row(soup: BeautifulSoup, text: str) -> Tag:
-    """섹션 구분 행 (colspan 전체, 굵게)."""
+def _section_row(soup: BeautifulSoup, text: str, colour: str = "") -> Tag:
+    """섹션 구분 행 (colspan 전체, 굵게, 선택적 배경색)."""
     tr = soup.new_tag('tr')
     td = soup.new_tag('td')
     td['colspan'] = str(TOTAL_COLS)
+    if colour:
+        td['data-highlight-colour'] = colour
     p = soup.new_tag('p')
     strong = soup.new_tag('strong')
     strong.string = text
@@ -195,15 +197,15 @@ def _build_full_table(soup: BeautifulSoup,
     tr_title.append(td_title)
     tbody.append(tr_title)
 
-    # Pre-BRD 섹션
-    tbody.append(_section_row(soup, SECTION_PRE))
+    # Pre-BRD 섹션 (옅은 빨간색)
+    tbody.append(_section_row(soup, SECTION_PRE, colour="#ffebe6"))
     tbody.append(_header_row(soup))
     for i, ticket in enumerate(pre_brd):
         for row in _build_ticket_block(soup, ticket, i + 1, include_brd=False):
             tbody.append(row)
 
-    # Post-BRD 섹션 (번호 이어서)
-    tbody.append(_section_row(soup, SECTION_POST))
+    # Post-BRD 섹션 (옅은 파란색)
+    tbody.append(_section_row(soup, SECTION_POST, colour="#e6fcff"))
     for i, ticket in enumerate(post_brd):
         for row in _build_ticket_block(
                 soup, ticket, len(pre_brd) + i + 1, include_brd=True):
