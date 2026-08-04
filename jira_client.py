@@ -21,9 +21,10 @@ class JiraClient:
     def get_new_improvement_tickets(self, extra_jql: str = "") -> list[dict]:
         """CCIPRJ, KCCIVOC, KEUVOCOP의 New/Improvement 티켓 전체 조회."""
         project_clause = ", ".join(JIRA_PROJECTS)
-        jql = f'project in ({project_clause}) AND issuetype in ("신규/개선", "Urgent Request") ORDER BY created DESC'
+        base = f'project in ({project_clause}) AND issuetype in ("신규/개선", "Urgent Request")'
         if extra_jql:
-            jql = f"({jql}) AND {extra_jql}"
+            base = f"{base} AND {extra_jql}"
+        jql = f"{base} ORDER BY created DESC"
         return self._search(jql)
 
     def _search(self, jql: str) -> list[dict]:
