@@ -1,10 +1,7 @@
 name: Doc2/Doc3 현황 업데이트
 
 on:
-  schedule:
-    # 평일(월~금) 매일 오전 10:00 KST (= 01:00 UTC)
-    - cron: '0 1 * * 1-5'
-  workflow_dispatch:  # 수동 실행 버튼
+  workflow_dispatch:  # 수동 실행만 (자동 스케줄은 Windows 작업 스케줄러로 대체)
 
 jobs:
   update-doc2-doc3:
