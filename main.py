@@ -40,10 +40,10 @@ def _check_env():
         sys.exit(1)
 
 
-def _fetch_and_analyze() -> list[dict]:
+def _fetch_and_analyze(extra_jql: str = "") -> list[dict]:
     print("Jira 티켓 조회 중...")
     jira = JiraClient()
-    tickets = jira.get_new_improvement_tickets()
+    tickets = jira.get_new_improvement_tickets(extra_jql=extra_jql)
     print(f"  → {len(tickets)}건 조회됨")
 
     # cycle_number 부여
@@ -71,7 +71,7 @@ def cmd_list_fields():
 
 def cmd_doc1():
     _check_env()
-    tickets = _fetch_and_analyze()
+    tickets = _fetch_and_analyze(extra_jql='created >= "2026-01-01"')
     doc1_updater.update(tickets, ConfluenceClient())
 
 
