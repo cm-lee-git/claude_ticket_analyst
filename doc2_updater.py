@@ -1,20 +1,12 @@
 """
-Document 2: 신규/개선 전체 현황 업데이트
-
-Confluence 페이지에 아래 마커가 미리 삽입되어 있어야 합니다:
-  <p>AUTO_SUMMARY_START</p>    ... <p>AUTO_SUMMARY_END</p>    ← 종합 현황 (Replace)
-  <p>AUTO_TRACKING_START</p>   ... <p>AUTO_TRACKING_END</p>   ← 회차별 트래킹 현황 (Replace)
-  <p>AUTO_TABLE_START</p>      ... <p>AUTO_TABLE_END</p>       ← 상세 티켓 테이블 (Replace)
-  <p>AUTO_PENDING_START</p>    ... <p>AUTO_PENDING_END</p>     ← 보류 중 현황 (Replace)
-  <p>AUTO_MATRIX_START</p>     ... <p>AUTO_MATRIX_END</p>      ← 회차별 마감 히스토리 매트릭스 (Replace)
-  <p>AUTO_KR_HISTORY_START</p> ... <p>AUTO_KR_HISTORY_END</p> ← KR 티켓 히스토리 (Replace)
-  <p>AUTO_EU_HISTORY_START</p> ... <p>AUTO_EU_HISTORY_END</p> ← EU 티켓 히스토리 (Replace)
-  <p>AUTO_HQ_HISTORY_START</p> ... <p>AUTO_HQ_HISTORY_END</p> ← HQ 티켓 히스토리 (Replace)
-  <p>AUTO_HISTORY_START</p>    ... <p>AUTO_HISTORY_END</p>     ← 회차 Expand 아카이브 (Append)
+Document 2: 신규/개선 전체 현황 — 새 페이지 생성 방식
+실행마다 타임스탬프가 붙은 새 페이지를 doc2 부모 페이지 하위에 생성.
 """
 from collections import defaultdict
+from datetime import datetime
 
 from confluence_client import ConfluenceClient
+from config import DOC_PAGE_IDS
 from cycle import cycle_label
 
 REGIONS = ["RHQ KR", "RHQ EU", "HQ GBCXD 및 타부문"]
@@ -30,8 +22,27 @@ SCORE_LABELS = {
     "platform_strategy":      "플랫폼 운영 전략 연계도",
 }
 
+# 참조 문서(71237682) 기준 열 너비
+COL_WIDTHS = {
+    "summary":   [200, 150, 150, 150, 150],                             # 5열: 종합 현황
+    "tracking":  [107, 159, 133, 133, 133, 133, 133],                  # 7열: 회차별 트래킹
+    "table":     [60, 110, 180, 260, 90, 90, 90, 300, 90, 90, 90],    # 11열: 상세 티켓
+    "pending":   [60, 110, 250, 100, 90, 90, 100, 100],                # 8열: 보류 현황
+    "matrix":    [100, 220, 220, 220, 180],                             # 5열: 매트릭스
+    "history":   [60, 110, 250, 100, 90, 90, 90],                      # 7열: 지역별 히스토리
+}
+
 
 # ── 공통 헬퍼 ───────────────────────────────────────────────────
+def _colgroup(widths: list[float]) -> str:
+    cols = "".join(f'<col style="width: {w}.0px;"/>' for w in widths)
+    return f"<colgroup>{cols}</colgroup>"
+
+
+def _with_colgroup(table_html: str, widths: list[float]) -> str:
+    return table_html.replace("<table>", f"<table>{_colgroup(widths)}", 1)
+
+
 def _cnt(tickets, region=None, approval=None) -> int:
     result = tickets
     if region:
@@ -48,7 +59,6 @@ def _th(*headers) -> str:
     return "<tr>" + "".join(f"<th><p>{h}</p></th>" for h in headers) + "</tr>"
 
 def _th_span(cells: list[tuple]) -> str:
-    """cells: list of (text, rowspan, colspan)"""
     parts = []
     for text, rs, cs in cells:
         attrs = ""
@@ -61,6 +71,9 @@ def _th_span(cells: list[tuple]) -> str:
 
 def _td(*cells) -> str:
     return "<tr>" + "".join(f"<td><p>{c}</p></td>" for c in cells) + "</tr>"
+
+def _h2(text: str) -> str:
+    return f"<h2>{text}</h2>"
 
 
 # ── 섹션 1: 종합 현황 ───────────────────────────────────────────
@@ -75,15 +88,12 @@ def _build_summary_html(tickets: list[dict]) -> str:
             str(_cnt(tickets, region, "Rejected")),
             str(_cnt(tickets, region, ["Pending", "Pre-BRD"])),
         ))
-    return f"<table><tbody>{''.join(rows)}</tbody></table>"
+    table = f"<table><tbody>{''.join(rows)}</tbody></table>"
+    return _with_colgroup(table, COL_WIDTHS["summary"])
 
 
 # ── 섹션 2: 회차별 트래킹 현황 ──────────────────────────────────
 def _build_cycle_tracking_html(tickets: list[dict], current_cycle: int) -> str:
-    """
-    현재 회차 티켓의 지역별 현황.
-    보류 중 세부: 보류중(Pending) / 승인 전환(Approved) / 반려 전환(Rejected)
-    """
     cur = [t for t in tickets if t.get("cycle_number") == current_cycle]
 
     header1 = _th_span([
@@ -107,18 +117,19 @@ def _build_cycle_tracking_html(tickets: list[dict], current_cycle: int) -> str:
             str(_cnt(cur, region)),
             str(_cnt(cur, region, "Approved")),
             str(_cnt(cur, region, "Rejected")),
-            str(_cnt(cur, region, ["Pending", "Pre-BRD"])),   # 보류중
-            str(_cnt(cur, region, "Approved")),                # 승인 전환 (≈ Approved)
-            str(_cnt(cur, region, "Rejected")),                # 반려 전환 (≈ Rejected)
+            str(_cnt(cur, region, ["Pending", "Pre-BRD"])),
+            str(_cnt(cur, region, "Approved")),
+            str(_cnt(cur, region, "Rejected")),
         ))
 
-    rows = [header1, header2] + data_rows
     label_str = cycle_label(current_cycle)
     title_row = f"<tr><td colspan=\"7\"><p>{label_str} 트래킹 현황</p></td></tr>"
-    return f"<table><tbody>{title_row}{''.join(rows)}</tbody></table>"
+    rows = [header1, header2] + data_rows
+    table = f"<table><tbody>{title_row}{''.join(rows)}</tbody></table>"
+    return _with_colgroup(table, COL_WIDTHS["tracking"])
 
 
-# ── 섹션 3: 상세 티켓 테이블 (기본 + 분석) ──────────────────────
+# ── 섹션 3: 상세 티켓 테이블 ────────────────────────────────────
 def _build_table_html(tickets: list[dict]) -> str:
     rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date",
                 "내용", "항목별 분포", "Priority 점수", "BRD 승인 여부", "유형 코드")]
@@ -142,7 +153,8 @@ def _build_table_html(tickets: list[dict]) -> str:
             content, score_text,
             str(t.get("priority_score", 0)), t.get("brd_approval", ""), type_code,
         ))
-    return f"<table><tbody>{''.join(rows)}</tbody></table>"
+    table = f"<table><tbody>{''.join(rows)}</tbody></table>"
+    return _with_colgroup(table, COL_WIDTHS["table"])
 
 
 # ── 섹션 4: 보류 중 현황 ────────────────────────────────────────
@@ -150,24 +162,19 @@ def _build_pending_html(tickets: list[dict]) -> str:
     pending = [t for t in tickets if t.get("brd_approval") in ("Pending", "Pre-BRD")]
     rows = [_th("회차", "Key", "Ticket Summary", "Reporter", "Created", "Due Date", "BRD 상태", "보류 유형")]
     for t in pending:
-        hold_code = t.get("hold_code") or ""
         rows.append(_td(
             cycle_label(t.get("cycle_number", 0)),
             t.get("key", ""), t.get("summary", ""), t.get("reporter", ""),
             t.get("created", ""), t.get("due_date", ""),
-            t.get("brd_approval", ""), hold_code,
+            t.get("brd_approval", ""), t.get("hold_code") or "",
         ))
-    return f"<table><tbody>{''.join(rows)}</tbody></table>"
+    table = f"<table><tbody>{''.join(rows)}</tbody></table>"
+    return _with_colgroup(table, COL_WIDTHS["pending"])
 
 
 # ── 섹션 5: 회차별 마감 히스토리 매트릭스 ──────────────────────
 def _build_matrix_html(tickets: list[dict]) -> str:
-    """
-    행: 회차 / 열: RHQ KR · RHQ EU · HQ GBCXD 및 타부문
-    셀: 인입 N / 승인 N / 반려 N / 보류 N
-    """
     cycles = sorted({t.get("cycle_number", 0) for t in tickets})
-
     rows = [_th("회차", "RHQ KR", "RHQ EU", "HQ GBCXD 및 타부문", "Total")]
     for cn in cycles:
         cycle_tickets = [t for t in tickets if t.get("cycle_number") == cn]
@@ -182,20 +189,14 @@ def _build_matrix_html(tickets: list[dict]) -> str:
 
         rows.append(_td(
             cycle_label(cn),
-            cell("RHQ KR"),
-            cell("RHQ EU"),
-            cell("HQ GBCXD 및 타부문"),
-            cell(None),
+            cell("RHQ KR"), cell("RHQ EU"), cell("HQ GBCXD 및 타부문"), cell(None),
         ))
-    return f"<table><tbody>{''.join(rows)}</tbody></table>"
+    table = f"<table><tbody>{''.join(rows)}</tbody></table>"
+    return _with_colgroup(table, COL_WIDTHS["matrix"])
 
 
 # ── 섹션 6: 지역별 티켓 히스토리 ────────────────────────────────
 def _build_regional_history_html(tickets: list[dict], region: str) -> str:
-    """
-    특정 지역의 티켓을 회차별로 묶어 표시.
-    region: "RHQ KR" | "RHQ EU" | "HQ GBCXD 및 타부문"
-    """
     region_key = REGION_KEYS.get(region, "HQ")
     filtered = [t for t in tickets if t.get("region") == region_key]
 
@@ -212,32 +213,11 @@ def _build_regional_history_html(tickets: list[dict], region: str) -> str:
                 t.get("created", ""), t.get("due_date", ""),
                 t.get("brd_approval", ""),
             ))
-
     if not filtered:
         rows.append(_td(region, "-", "-", "-", "-", "-", "-"))
 
-    return f"<table><tbody>{''.join(rows)}</tbody></table>"
-
-
-# ── 섹션 7: 히스토리 아카이빙 (Expand Macro, Append) ────────────
-def _build_history_expand_html(tickets: list[dict], cycle_n: int) -> str:
-    label = cycle_label(cycle_n)
-    rows = [_th("구분", "티켓 인입 수", "승인", "반려", "보류")]
-    for rl, region in [("Total", None)] + [(r, r) for r in REGIONS]:
-        rows.append(_td(
-            rl,
-            str(_cnt(tickets, region)),
-            str(_cnt(tickets, region, "Approved")),
-            str(_cnt(tickets, region, "Rejected")),
-            str(_cnt(tickets, region, ["Pending", "Pre-BRD"])),
-        ))
     table = f"<table><tbody>{''.join(rows)}</tbody></table>"
-    return (
-        f'<ac:structured-macro ac:name="expand">'
-        f'<ac:parameter ac:name="title">{label} 마감 현황</ac:parameter>'
-        f'<ac:rich-text-body>{table}</ac:rich-text-body>'
-        f'</ac:structured-macro>'
-    )
+    return _with_colgroup(table, COL_WIDTHS["history"])
 
 
 # ── 메인 업데이트 함수 ──────────────────────────────────────────
@@ -245,33 +225,33 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     if client is None:
         client = ConfluenceClient()
 
-    page = client.find_page("doc2")
-    page_id = page["id"]
-    html, version, title = client.get_page_storage(page_id)
-
     current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
 
-    # Replace 섹션들
-    html = client.replace_section(html, "AUTO_SUMMARY",
-                                  _build_summary_html(tickets_with_analysis))
-    html = client.replace_section(html, "AUTO_TRACKING",
-                                  _build_cycle_tracking_html(tickets_with_analysis, current_cycle))
-    html = client.replace_section(html, "AUTO_TABLE",
-                                  _build_table_html(tickets_with_analysis))
-    html = client.replace_section(html, "AUTO_PENDING",
-                                  _build_pending_html(tickets_with_analysis))
-    html = client.replace_section(html, "AUTO_MATRIX",
-                                  _build_matrix_html(tickets_with_analysis))
-    html = client.replace_section(html, "AUTO_KR_HISTORY",
-                                  _build_regional_history_html(tickets_with_analysis, "RHQ KR"))
-    html = client.replace_section(html, "AUTO_EU_HISTORY",
-                                  _build_regional_history_html(tickets_with_analysis, "RHQ EU"))
-    html = client.replace_section(html, "AUTO_HQ_HISTORY",
-                                  _build_regional_history_html(tickets_with_analysis, "HQ GBCXD 및 타부문"))
+    sections = [
+        _h2("종합 현황"),
+        _build_summary_html(tickets_with_analysis),
+        _h2(f"{cycle_label(current_cycle)} 트래킹 현황"),
+        _build_cycle_tracking_html(tickets_with_analysis, current_cycle),
+        _h2("티켓 상세 현황"),
+        _build_table_html(tickets_with_analysis),
+        _h2("보류 중 현황"),
+        _build_pending_html(tickets_with_analysis),
+        _h2("회차별 마감 히스토리"),
+        _build_matrix_html(tickets_with_analysis),
+        _h2("KR 티켓 히스토리"),
+        _build_regional_history_html(tickets_with_analysis, "RHQ KR"),
+        _h2("EU 티켓 히스토리"),
+        _build_regional_history_html(tickets_with_analysis, "RHQ EU"),
+        _h2("HQ 티켓 히스토리"),
+        _build_regional_history_html(tickets_with_analysis, "HQ GBCXD 및 타부문"),
+    ]
+    html = "\n".join(sections)
 
-    # Append 섹션 (히스토리 누적)
-    html = client.append_to_section(html, "AUTO_HISTORY",
-                                    _build_history_expand_html(tickets_with_analysis, current_cycle))
+    timestamp = datetime.now().strftime("%m-%d %H:%M")
+    title = f"{timestamp} 신규/개선 전체 현황 (AI 생성)"
+    parent_id = DOC_PAGE_IDS["doc2"]
 
-    client.update_page(page_id, title, html, version, "Doc2 현황 업데이트")
+    result = client.create_page(parent_id, title, html)
+    new_id = result.get("id", "")
     print(f"[Doc2] 완료  총 {len(tickets_with_analysis)}건")
+    print(f"[Doc2] 새 페이지: {title}  (id={new_id})")

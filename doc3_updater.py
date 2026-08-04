@@ -1,12 +1,14 @@
 """
-Document 3: (Kia) 신규/개선 (AI 생성) — Smart Updater
-- Cycle별 표 구조 (1티켓 = 7행, rowspan 포함)
-- 기존 티켓: Key로 탐색 후 셀 값 업데이트
-- 신규 티켓: 7행 rowspan 블록을 해당 Cycle 표 맨 아래 추가
-- 새 Cycle: 새 표 자동 생성
+Document 3: (Kia) 신규/개선 — 새 페이지 생성 방식
+실행마다 타임스탬프가 붙은 새 페이지를 doc3 부모 페이지 하위에 생성.
+Cycle별 표 구조 (1티켓 = 7행, rowspan 포함).
 """
+from collections import defaultdict
+from datetime import datetime
+
 from bs4 import BeautifulSoup, Tag
 from confluence_client import ConfluenceClient
+from config import DOC_PAGE_IDS
 from cycle import cycle_label, get_cycle_bounds
 
 SCORE_LABELS = [
@@ -21,41 +23,30 @@ SCORE_KEYS = [
     "priority_score",
 ]
 
-
-def _get_existing_keys(table: Tag) -> dict[str, Tag]:
-    keys = {}
-    for row in table.find_all('tr'):
-        cells = row.find_all(['td', 'th'])
-        if len(cells) > 8 and any(int(c.get('rowspan', 1)) > 1 for c in cells):
-            key_text = cells[2].get_text(strip=True)
-            if key_text and key_text not in keys:
-                keys[key_text] = row
-    return keys
-
-
-def _find_cycle_table(soup: BeautifulSoup, cycle_n: int) -> Tag | None:
-    label = cycle_label(cycle_n)
-    for table in soup.find_all('table'):
-        first = table.find('tr')
-        if first and label in first.get_text():
-            return table
-    return None
+# 참조 문서(71172124) 기준 열 너비 (12열)
+COL_WIDTHS = [126, 109, 179, 515, 140, 135, 122, 252, 221, 167, 154, 154]
 
 
 def _create_cycle_table(soup: BeautifulSoup, cycle_n: int) -> Tag:
-    """새 Cycle 표 생성 (타이틀행 + 헤더행)."""
-    from cycle import get_cycle_bounds
-    import datetime
+    """새 Cycle 표 생성 (colgroup + 타이틀행 + 헤더행)."""
     start, end = get_cycle_bounds(cycle_n)
     label = f"{cycle_label(cycle_n)} ({start.strftime('%Y %m/%d')}~{end.strftime('%m/%d')})"
 
     table = soup.new_tag('table')
+
+    # 열 너비 colgroup
+    colgroup = soup.new_tag('colgroup')
+    for w in COL_WIDTHS:
+        col = soup.new_tag('col', style=f"width: {w}.0px;")
+        colgroup.append(col)
+    table.append(colgroup)
+
     tbody = soup.new_tag('tbody')
 
     # 타이틀행
     tr_t = soup.new_tag('tr')
     td_t = soup.new_tag('td')
-    td_t['colspan'] = '11'
+    td_t['colspan'] = '12'
     p = soup.new_tag('p')
     p.string = label
     td_t.append(p)
@@ -83,39 +74,6 @@ def _create_cycle_table(soup: BeautifulSoup, cycle_n: int) -> Tag:
     return table
 
 
-def _update_ticket_row(first_row: Tag, ticket: dict, soup: BeautifulSoup):
-    cells = first_row.find_all(['td', 'th'])
-    scores = ticket.get('scores', {})
-
-    def set_cell(idx, text):
-        if idx < len(cells):
-            for c in list(cells[idx].children):
-                c.extract()
-            p = soup.new_tag('p')
-            p.string = str(text)
-            cells[idx].append(p)
-
-    set_cell(3, ticket.get('summary', ''))
-    set_cell(4, ticket.get('reporter', ''))
-    set_cell(5, ticket.get('created', ''))
-    set_cell(6, ticket.get('due_date', ''))
-    set_cell(8, str(scores.get(SCORE_KEYS[0], '')))  # 시급성 점수
-
-    next_row = first_row.find_next_sibling('tr')
-    for i in range(1, 7):
-        if next_row is None:
-            break
-        row_cells = next_row.find_all(['td', 'th'])
-        if len(row_cells) == 2:
-            for c in list(row_cells[1].children):
-                c.extract()
-            p = soup.new_tag('p')
-            val = scores.get(SCORE_KEYS[i], '') if i < 6 else ticket.get('priority_score', '')
-            p.string = str(val)
-            row_cells[1].append(p)
-        next_row = next_row.find_next_sibling('tr')
-
-
 def _build_ticket_block(soup: BeautifulSoup, ticket: dict, seq_num: int) -> list[Tag]:
     """7행 티켓 블록 생성."""
     scores = ticket.get('scores', {})
@@ -132,24 +90,21 @@ def _build_ticket_block(soup: BeautifulSoup, ticket: dict, seq_num: int) -> list
         return cell
 
     rows = []
-
-    # Row 1
     tr1 = soup.new_tag('tr')
     tr1.append(td(seq_num, rowspan=7))
-    tr1.append(td(ticket.get('region', ''), rowspan=7))         # Target
-    tr1.append(td(ticket.get('key', ''), rowspan=7))            # Ticket No.
-    tr1.append(td(ticket.get('summary', ''), rowspan=7))        # Summary
+    tr1.append(td(ticket.get('region', ''), rowspan=7))
+    tr1.append(td(ticket.get('key', ''), rowspan=7))
+    tr1.append(td(ticket.get('summary', ''), rowspan=7))
     tr1.append(td(ticket.get('reporter', ''), rowspan=7))
     tr1.append(td(ticket.get('created', ''), rowspan=7))
     tr1.append(td(ticket.get('due_date', ''), rowspan=7))
-    tr1.append(td(SCORE_LABELS[0]))                             # 시급성 레이블
-    tr1.append(td(scores.get(SCORE_KEYS[0], '')))               # 시급성 점수
-    tr1.append(td('', rowspan=7))                               # CCI Escalation
-    tr1.append(td('', rowspan=7))                               # Deployment Plan
-    tr1.append(td('', rowspan=7))                               # Remark
+    tr1.append(td(SCORE_LABELS[0]))
+    tr1.append(td(scores.get(SCORE_KEYS[0], '')))
+    tr1.append(td('', rowspan=7))
+    tr1.append(td('', rowspan=7))
+    tr1.append(td('', rowspan=7))
     rows.append(tr1)
 
-    # Rows 2~7: 나머지 스코어링
     for i in range(1, 7):
         tr = soup.new_tag('tr')
         tr.append(td(SCORE_LABELS[i]))
@@ -164,38 +119,26 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     if client is None:
         client = ConfluenceClient()
 
-    page = client.find_page("doc3")
-    page_id = page["id"]
-    html, version, title = client.get_page_storage(page_id)
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup("", 'html.parser')
 
-    # Cycle별로 그룹화
-    from collections import defaultdict
     by_cycle: dict[int, list[dict]] = defaultdict(list)
     for t in tickets_with_analysis:
         by_cycle[t.get('cycle_number', 0)].append(t)
 
     for cycle_n in sorted(by_cycle.keys(), reverse=True):
         tickets = by_cycle[cycle_n]
-        table = _find_cycle_table(soup, cycle_n)
-        if table is None:
-            table = _create_cycle_table(soup, cycle_n)
-            soup.append(table)
+        table = _create_cycle_table(soup, cycle_n)
+        tbody = table.find('tbody')
+        for i, t in enumerate(tickets, start=1):
+            for row in _build_ticket_block(soup, t, i):
+                tbody.append(row)
+        soup.append(table)
 
-        existing_keys = _get_existing_keys(table)
-        tbody = table.find('tbody') or table
-        seq_start = len(existing_keys) + 1
+    timestamp = datetime.now().strftime("%m-%d %H:%M")
+    title = f"{timestamp} (Kia) 신규/개선 (AI 생성)"
+    parent_id = DOC_PAGE_IDS["doc3"]
 
-        for t in tickets:
-            key = t.get('key', '')
-            if key in existing_keys:
-                _update_ticket_row(existing_keys[key], t, soup)
-            else:
-                rows = _build_ticket_block(soup, t, seq_start)
-                seq_start += 1
-                for row in rows:
-                    tbody.append(row)
-
-    new_html = str(soup)
-    client.update_page(page_id, title, new_html, version, "Doc3 Smart Update")
+    result = client.create_page(parent_id, title, str(soup))
+    new_id = result.get("id", "")
     print(f"[Doc3] 완료  총 {len(tickets_with_analysis)}건")
+    print(f"[Doc3] 새 페이지: {title}  (id={new_id})")
