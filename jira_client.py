@@ -19,9 +19,15 @@ class JiraClient:
         return self._get("/field")
 
     def get_new_improvement_tickets(self, extra_jql: str = "") -> list[dict]:
-        """CCIPRJ, KCCIVOC, KEUVOCOP의 New/Improvement 티켓 전체 조회."""
-        project_clause = ", ".join(JIRA_PROJECTS)
-        base = f'project in ({project_clause}) AND issuetype in ("신규/개선", "Urgent Request")'
+        """Kia 관련 New/Improvement 티켓 조회.
+        - KCCIVOC, KEUVOCOP: Kia 전용 프로젝트 → 전체 포함
+        - CCIPRJ: summary에 'Kia' 포함된 것만 포함 (Hyundai/Genesis 제외)
+        """
+        base = (
+            '(project in (KCCIVOC, KEUVOCOP) OR '
+            '(project = CCIPRJ AND summary ~ "Kia")) '
+            'AND issuetype in ("신규/개선", "Urgent Request")'
+        )
         if extra_jql:
             base = f"{base} AND {extra_jql}"
         jql = f"{base} ORDER BY created DESC"

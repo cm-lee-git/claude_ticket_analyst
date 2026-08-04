@@ -29,8 +29,14 @@ class ConfluenceClient:
     def get_space_id(self, page_id: str) -> str:
         return self._get(f"/pages/{page_id}")["spaceId"]
 
+    def _post_v1(self, path: str, payload: dict) -> dict:
+        base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
+        r = requests.post(f"{base_v1}{path}", auth=self.auth, headers=self.headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
     def create_page(self, parent_id: str, title: str, html: str) -> dict:
-        """parent_id 하위에 새 페이지 생성."""
+        """parent_id 하위에 새 페이지 생성 (간격 넓게 포함)."""
         space_id = self.get_space_id(parent_id)
         result = self._post("/pages", {
             "spaceId": space_id,
@@ -39,12 +45,12 @@ class ConfluenceClient:
             "parentId": parent_id,
             "body": {"representation": "storage", "value": html},
         })
-        # 간격 넓게 (full-width) 설정
+        # 간격 넓게: v1 content property API로 full-width 설정
         page_id = result.get("id", "")
         if page_id:
             for key in ("content-appearance-published", "content-appearance-draft"):
                 try:
-                    self._post(f"/pages/{page_id}/properties", {
+                    self._post_v1(f"/content/{page_id}/property", {
                         "key": key,
                         "value": {"appearance": "full-width"},
                     })
