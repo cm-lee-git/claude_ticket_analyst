@@ -137,9 +137,19 @@ class DryRunConfluenceClient:
                     version: int, message: str = "") -> dict:
         out_path = self._out / f"{page_id}_output.html"
         out_path.write_text(new_html, encoding="utf-8")
-        self._state[page_id] = new_html   # 다음 호출을 위해 상태 갱신
+        self._state[page_id] = new_html
         print(f"  [저장] {out_path}  ({len(new_html):,} chars)")
         return {}
+
+    def get_space_id(self, page_id: str) -> str:
+        return "dry-run-space"
+
+    def create_page(self, parent_id: str, title: str, html: str) -> dict:
+        safe = title.replace(":", "-").replace(" ", "_")
+        out_path = self._out / f"{safe}.html"
+        out_path.write_text(html, encoding="utf-8")
+        print(f"  [새 페이지] {out_path}  ({len(html):,} chars)")
+        return {"id": "dry-run-new-page"}
 
     # doc2_updater가 client.replace_section / append_to_section 으로 호출
     @staticmethod

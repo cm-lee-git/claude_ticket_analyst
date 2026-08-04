@@ -21,6 +21,25 @@ class ConfluenceClient:
         r.raise_for_status()
         return r.json()
 
+    def _post(self, path: str, payload: dict) -> dict:
+        r = requests.post(f"{self.base}{path}", auth=self.auth, headers=self.headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+    def get_space_id(self, page_id: str) -> str:
+        return self._get(f"/pages/{page_id}")["spaceId"]
+
+    def create_page(self, parent_id: str, title: str, html: str) -> dict:
+        """parent_id 하위에 새 페이지 생성."""
+        space_id = self.get_space_id(parent_id)
+        return self._post("/pages", {
+            "spaceId": space_id,
+            "status": "current",
+            "title": title,
+            "parentId": parent_id,
+            "body": {"representation": "storage", "value": html},
+        })
+
     def get_child_pages(self, parent_id: str = CONFLUENCE_PARENT_PAGE_ID) -> list[dict]:
         data = self._get(f"/pages/{parent_id}/children", params={"limit": 50})
         return data.get("results", [])

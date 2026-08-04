@@ -5,8 +5,10 @@ Document 1: KKR OneApp 주간 보고 (AI 생성) — Full Rebuild Updater
 - Post-BRD: cycle_number >= 1인 티켓, cycle 오름차순 → created 오름차순
 업데이트 주기: 매주 월요일 10:00
 """
+from datetime import datetime
 from bs4 import BeautifulSoup, Tag
 from confluence_client import ConfluenceClient
+from config import DOC_PAGE_IDS
 from cycle import cycle_label
 
 SCORE_LABELS = [
@@ -204,12 +206,7 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     if client is None:
         client = ConfluenceClient()
 
-    page = client.find_page("doc1")
-    page_id = page["id"]
-    html, version, title = client.get_page_storage(page_id)
-    soup = BeautifulSoup(html, 'html.parser')
-
-    # Pre-BRD: cycle_number == 0 (BRD 프로세스 도입 이전 생성 티켓), created 오름차순
+    # Pre-BRD: cycle_number == 0, created 오름차순
     pre_brd = sorted(
         [t for t in tickets_with_analysis if t.get('cycle_number', 0) == 0],
         key=lambda t: t.get('created', '')
@@ -220,24 +217,17 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
         key=lambda t: (t.get('cycle_number', 0), t.get('created', ''))
     )
 
+    # 새 페이지 콘텐츠 빌드
+    soup = BeautifulSoup("", 'html.parser')
     new_table = _build_full_table(soup, pre_brd, post_brd)
+    soup.append(new_table)
 
-    # 기존 표 탐색 (타이틀 행 텍스트 기준)
-    old_table = None
-    for table in soup.find_all('table'):
-        first_row = table.find('tr')
-        if first_row and (
-            TABLE_TITLE in first_row.get_text() or
-            SECTION_PRE  in first_row.get_text()
-        ):
-            old_table = table
-            break
+    # 타임스탬프 제목으로 새 페이지 생성 (AI 생성 폴더 하위)
+    timestamp = datetime.now().strftime("%m-%d %H:%M")
+    title = f"{timestamp} KKR OneApp 주간 보고 (AI 생성)"
+    parent_id = DOC_PAGE_IDS["doc1"]
 
-    if old_table:
-        old_table.replace_with(new_table)
-    else:
-        body = soup.find('body') or soup
-        body.append(new_table)
-
-    client.update_page(page_id, title, str(soup), version, "Doc1 Full Rebuild")
+    result = client.create_page(parent_id, title, str(soup))
+    new_id = result.get("id", "")
     print(f"[Doc1] 완료  Pre-BRD: {len(pre_brd)}건 / Post-BRD: {len(post_brd)}건")
+    print(f"[Doc1] 새 페이지: {title}  (id={new_id})")
