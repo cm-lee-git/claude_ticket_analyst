@@ -32,13 +32,25 @@ class ConfluenceClient:
     def create_page(self, parent_id: str, title: str, html: str) -> dict:
         """parent_id 하위에 새 페이지 생성."""
         space_id = self.get_space_id(parent_id)
-        return self._post("/pages", {
+        result = self._post("/pages", {
             "spaceId": space_id,
             "status": "current",
             "title": title,
             "parentId": parent_id,
             "body": {"representation": "storage", "value": html},
         })
+        # 간격 넓게 (full-width) 설정
+        page_id = result.get("id", "")
+        if page_id:
+            for key in ("content-appearance-published", "content-appearance-draft"):
+                try:
+                    self._post(f"/pages/{page_id}/properties", {
+                        "key": key,
+                        "value": {"appearance": "full-width"},
+                    })
+                except Exception:
+                    pass
+        return result
 
     def get_child_pages(self, parent_id: str = CONFLUENCE_PARENT_PAGE_ID) -> list[dict]:
         data = self._get(f"/pages/{parent_id}/children", params={"limit": 50})

@@ -46,7 +46,7 @@ def _count_o(scores: dict) -> str:
 
 
 def _td(soup: BeautifulSoup, text, rowspan: int = 1) -> Tag:
-    cell = soup.new_tag('td')
+    cell = soup.new_tag('td', style="padding: 10px 8px;")
     if rowspan > 1:
         cell['rowspan'] = str(rowspan)
     p = soup.new_tag('p')
@@ -116,7 +116,7 @@ def _header_row(soup: BeautifulSoup) -> Tag:
     ]
     tr = soup.new_tag('tr')
     for text, colspan in col_specs:
-        th = soup.new_tag('th')
+        th = soup.new_tag('th', style="padding: 10px 8px;")
         if colspan > 1:
             th['colspan'] = str(colspan)
         p = soup.new_tag('p')
