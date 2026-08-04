@@ -31,6 +31,9 @@ SECTION_PRE  = "BRD 프로세스 적용 이전 (Pre-BRD)"
 SECTION_POST = "BRD 프로세스 적용 이후"
 TOTAL_COLS   = 12
 
+# 참조 문서(71139380)의 New/Improvement 표 열 너비 (px)
+COL_WIDTHS = [51, 70, 182, 242, 93, 100, 98, 475, 147, 129, 105, 107]
+
 
 def _score_mark(value) -> str:
     try:
@@ -170,6 +173,14 @@ def _build_full_table(soup: BeautifulSoup,
                        pre_brd: list[dict], post_brd: list[dict]) -> Tag:
     """Pre-BRD + Post-BRD를 단일 테이블로 생성. 번호는 연속."""
     table = soup.new_tag('table')
+
+    # 열 너비 설정 (참조 문서 기준)
+    colgroup = soup.new_tag('colgroup')
+    for w in COL_WIDTHS:
+        col = soup.new_tag('col', style=f"width: {w}.0px;")
+        colgroup.append(col)
+    table.append(colgroup)
+
     tbody = soup.new_tag('tbody')
 
     # 테이블 타이틀 행
