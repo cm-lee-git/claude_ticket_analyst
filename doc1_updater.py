@@ -21,9 +21,8 @@ SCORE_KEYS = [
 ]
 BRD_DISPLAY = {
     "Approved": "승인",
-    "Pending":  "보류",
-    "Rejected": "반려",
-    "Pre-BRD":  "",
+    "보류":     "보류",
+    "반려":     "반려",
 }
 
 TABLE_TITLE  = "New/Improvement"
@@ -48,12 +47,46 @@ def _count_o(scores: dict) -> str:
     return str(sum(1 for k in keys if float(scores.get(k, 0)) > 0))
 
 
+JIRA_BROWSE = "https://hmg.atlassian.net/browse"
+import re as _re
+_TICKET_PATTERN = _re.compile(r'\b(KCCIVOC|KEUVOCOP|CCIPRJ)-\d+\b')
+
+
+def _linkify(soup: BeautifulSoup, text: str) -> list:
+    """텍스트 내 Jira 티켓 키 패턴을 하이퍼링크로 변환, BeautifulSoup 노드 리스트 반환."""
+    parts = []
+    last = 0
+    for m in _TICKET_PATTERN.finditer(text):
+        if m.start() > last:
+            parts.append(soup.new_string(text[last:m.start()]))
+        a = soup.new_tag('a', href=f"{JIRA_BROWSE}/{m.group()}")
+        a.string = m.group()
+        parts.append(a)
+        last = m.end()
+    if last < len(text):
+        parts.append(soup.new_string(text[last:]))
+    return parts or [soup.new_string(text)]
+
+
 def _td(soup: BeautifulSoup, text, rowspan: int = 1) -> Tag:
     cell = soup.new_tag('td', style="padding: 14px 10px; line-height: 1.6;")
     if rowspan > 1:
         cell['rowspan'] = str(rowspan)
     p = soup.new_tag('p')
     p.string = str(text)
+    cell.append(p)
+    return cell
+
+
+def _td_link(soup: BeautifulSoup, key: str, rowspan: int = 1) -> Tag:
+    """Key 셀 — Jira 티켓 URL 하이퍼링크."""
+    cell = soup.new_tag('td', style="padding: 14px 10px; line-height: 1.6;")
+    if rowspan > 1:
+        cell['rowspan'] = str(rowspan)
+    p = soup.new_tag('p')
+    a = soup.new_tag('a', href=f"{JIRA_BROWSE}/{key}")
+    a.string = key
+    p.append(a)
     cell.append(p)
     return cell
 
@@ -65,6 +98,8 @@ def _fill_content_cell(cell: Tag, ticket: dict, soup: BeautifulSoup):
 
     feature_label = ticket.get('feature_label') or '기존 기능 개선'
     sections = [
+        # Status: 현재 처리 상태 (있을 경우 Summary 위에 배치)
+        ('Status',       ticket.get('status_info', '')),
         ('Summary',      ticket.get('summary_ko') or ticket.get('summary', '')),
         ('배경',         ticket.get('background', '')),
         ('문제',         ticket.get('problem', '')),
@@ -91,7 +126,8 @@ def _fill_content_cell(cell: Tag, ticket: dict, soup: BeautifulSoup):
                 items = [str(content).strip()]
         for item in items:
             li = soup.new_tag('li')
-            li.string = item
+            for node in _linkify(soup, item):
+                li.append(node)
             ul.append(li)
         cell.append(ul)
 
@@ -139,13 +175,20 @@ def _build_ticket_block(soup: BeautifulSoup, ticket: dict,
     """
     scores = ticket.get('scores', {})
     priority_text = _count_o(scores)
-    brd_text = BRD_DISPLAY.get(ticket.get('brd_approval', ''), '') if include_brd else ''
+    if not include_brd:
+        brd_text = '-'
+    elif ticket.get('rejection_code'):
+        brd_text = '반려'
+    elif ticket.get('hold_code'):
+        brd_text = '보류'
+    else:
+        brd_text = BRD_DISPLAY.get(ticket.get('brd_approval', ''), '')
 
     rows = []
     tr1 = soup.new_tag('tr')
     tr1.append(_td(soup, seq_num, rowspan=6))
     tr1.append(_td(soup, cycle_label(ticket.get('cycle_number', 0)), rowspan=6))
-    tr1.append(_td(soup, ticket.get('key', ''), rowspan=6))
+    tr1.append(_td_link(soup, ticket.get('key', ''), rowspan=6))
     tr1.append(_td(soup, ticket.get('summary', ''), rowspan=6))
     tr1.append(_td(soup, ticket.get('reporter', ''), rowspan=6))
     tr1.append(_td(soup, ticket.get('created', ''), rowspan=6))
@@ -171,69 +214,162 @@ def _build_ticket_block(soup: BeautifulSoup, ticket: dict,
     return rows
 
 
-def _build_full_table(soup: BeautifulSoup,
-                       pre_brd: list[dict], post_brd: list[dict]) -> Tag:
-    """Pre-BRD + Post-BRD를 단일 테이블로 생성. 번호는 연속."""
+def _make_table(soup: BeautifulSoup) -> tuple[Tag, Tag]:
+    """colgroup이 있는 빈 table + tbody 반환."""
     table = soup.new_tag('table')
-
-    # 열 너비 설정 (참조 문서 기준)
     colgroup = soup.new_tag('colgroup')
     for w in COL_WIDTHS:
         col = soup.new_tag('col', style=f"width: {w}.0px;")
         colgroup.append(col)
     table.append(colgroup)
-
     tbody = soup.new_tag('tbody')
+    table.append(tbody)
+    return table, tbody
 
-    # 테이블 타이틀 행
-    tr_title = soup.new_tag('tr')
-    td_title = soup.new_tag('td')
-    td_title['colspan'] = str(TOTAL_COLS)
-    p = soup.new_tag('p')
-    strong = soup.new_tag('strong')
-    strong.string = TABLE_TITLE
-    p.append(strong)
-    td_title.append(p)
-    tr_title.append(td_title)
-    tbody.append(tr_title)
 
-    # Pre-BRD 섹션 (옅은 빨간색)
+def _build_pre_brd_table(soup: BeautifulSoup, pre_brd: list[dict]) -> Tag:
+    """Pre-BRD 전용 표."""
+    table, tbody = _make_table(soup)
     tbody.append(_section_row(soup, SECTION_PRE, colour="#ffebe6"))
     tbody.append(_header_row(soup))
     for i, ticket in enumerate(pre_brd):
         for row in _build_ticket_block(soup, ticket, i + 1, include_brd=False):
             tbody.append(row)
+    return table
 
-    # Post-BRD 섹션 (옅은 파란색)
+
+def _build_post_brd_table(soup: BeautifulSoup, post_brd: list[dict],
+                           offset: int) -> Tag:
+    """BRD 이후 프로세스 전용 표 (섹션 행 + 헤더 행 포함)."""
+    table, tbody = _make_table(soup)
     tbody.append(_section_row(soup, SECTION_POST, colour="#e6fcff"))
+    tbody.append(_header_row(soup))
     for i, ticket in enumerate(post_brd):
         for row in _build_ticket_block(
-                soup, ticket, len(pre_brd) + i + 1, include_brd=True):
+                soup, ticket, offset + i + 1, include_brd=True):
             tbody.append(row)
-
-    table.append(tbody)
     return table
+
+
+def _count_tickets_in_tbody(tbody: Tag) -> int:
+    """tbody에서 티켓 수 카운트: 첫 번째 셀이 rowspan=6인 행 수."""
+    count = 0
+    for tr in tbody.find_all('tr'):
+        first = tr.find(['td', 'th'])
+        if first and first.get('rowspan') == '6':
+            count += 1
+    return count
+
+
+def append_new_tickets(tickets_with_analysis: list[dict],
+                       client: ConfluenceClient | None = None):
+    """화~금: 당일 신규 티켓만 기존 최신 doc1 페이지에 추가."""
+    if client is None:
+        client = ConfluenceClient()
+
+    # Doc1는 KR 권역 티켓만 포함
+    tickets_with_analysis = [t for t in tickets_with_analysis if t.get("region") == "KR"]
+    if not tickets_with_analysis:
+        print("[Doc1-Daily] 신규 KR 티켓 없음 → 종료")
+        return
+
+    # 최신 doc1 페이지 찾기 (제목 내림차순 = 가장 최근 월요일 페이지)
+    children = client.get_child_pages(DOC_PAGE_IDS["doc1"])
+    if not children:
+        print("[Doc1-Daily] 기존 페이지 없음 → 종료")
+        return
+    latest = sorted(children, key=lambda p: p["title"], reverse=True)[0]
+    page_id = latest["id"]
+    print(f"[Doc1-Daily] 대상 페이지: {latest['title']} (id={page_id})")
+
+    html, version, title = client.get_page_storage(page_id)
+    soup = BeautifulSoup(html, 'html.parser')
+
+    tables = soup.find_all('table')
+    if len(tables) < 2:
+        print("[Doc1-Daily] 표 구조 이상 (2개 미만) → 종료")
+        return
+
+    pre_tbody  = tables[0].find('tbody')
+    post_tbody = tables[1].find('tbody')
+
+    pre_existing  = _count_tickets_in_tbody(pre_tbody)
+    post_existing = _count_tickets_in_tbody(post_tbody)
+
+    # 신규 티켓 분류
+    new_pre = sorted(
+        [t for t in tickets_with_analysis if t.get('cycle_number', 0) == 0],
+        key=lambda t: t.get('created', '')
+    )
+    new_post = sorted(
+        [t for t in tickets_with_analysis if t.get('cycle_number', 0) > 0],
+        key=lambda t: (t.get('cycle_number', 0), t.get('created', ''))
+    )
+
+    # Pre-BRD 표에 추가
+    for i, ticket in enumerate(new_pre):
+        for row in _build_ticket_block(soup, ticket, pre_existing + i + 1, include_brd=False):
+            pre_tbody.append(row)
+
+    # Post-BRD 표에 추가
+    for i, ticket in enumerate(new_post):
+        for row in _build_ticket_block(soup, ticket, post_existing + i + 1, include_brd=True):
+            post_tbody.append(row)
+
+    client.update_page(page_id, title, str(soup), version,
+                       message=f"Daily: {len(new_pre)}건 Pre-BRD, {len(new_post)}건 Post-BRD 추가")
+    print(f"[Doc1-Daily] 완료  Pre-BRD+{len(new_pre)}건 / Post-BRD+{len(new_post)}건")
+    print(f"[Doc1-Daily] 페이지 업데이트: {title} (id={page_id})")
 
 
 def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = None):
     if client is None:
         client = ConfluenceClient()
 
+    # Doc1는 KR 권역 티켓만 포함
+    kr_tickets = [t for t in tickets_with_analysis if t.get("region") == "KR"]
+
     # Pre-BRD: cycle_number == 0, created 오름차순
     pre_brd = sorted(
-        [t for t in tickets_with_analysis if t.get('cycle_number', 0) == 0],
+        [t for t in kr_tickets if t.get('cycle_number', 0) == 0],
         key=lambda t: t.get('created', '')
     )
     # Post-BRD: cycle_number >= 1, cycle 오름차순 → created 오름차순
     post_brd = sorted(
-        [t for t in tickets_with_analysis if t.get('cycle_number', 0) > 0],
+        [t for t in kr_tickets if t.get('cycle_number', 0) > 0],
         key=lambda t: (t.get('cycle_number', 0), t.get('created', ''))
     )
 
     # 새 페이지 콘텐츠 빌드
     soup = BeautifulSoup("", 'html.parser')
-    new_table = _build_full_table(soup, pre_brd, post_brd)
-    soup.append(new_table)
+
+    # 목차
+    toc = BeautifulSoup(
+        '<ac:structured-macro ac:name="toc" ac:schema-version="1">'
+        '<ac:parameter ac:name="style">none</ac:parameter>'
+        '</ac:structured-macro>', 'html.parser')
+    soup.append(toc)
+
+    # h1: New/Improvement (표 바깥 헤딩)
+    h1 = soup.new_tag('h1')
+    h1.string = TABLE_TITLE
+    soup.append(h1)
+
+    # h2: Pre-BRD 섹션 제목 (목차 연결용)
+    h2_pre = soup.new_tag('h2')
+    h2_pre.string = SECTION_PRE
+    soup.append(h2_pre)
+
+    # 표 1: Pre-BRD
+    soup.append(_build_pre_brd_table(soup, pre_brd))
+
+    # h2: Post-BRD 섹션 제목 (목차 연결용)
+    h2_post = soup.new_tag('h2')
+    h2_post.string = SECTION_POST
+    soup.append(h2_post)
+
+    # 표 2: BRD 이후 프로세스 (별도 표로 시작)
+    soup.append(_build_post_brd_table(soup, post_brd, offset=len(pre_brd)))
 
     # 타임스탬프 제목으로 새 페이지 생성 (AI 생성 폴더 하위)
     timestamp = datetime.now().strftime("%m-%d %H:%M")

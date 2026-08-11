@@ -16,6 +16,7 @@ import sys
 from collections import Counter
 from datetime import date
 
+
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
@@ -67,7 +68,11 @@ def adapt_tickets(raw: list[dict]) -> list[dict]:
         scores = {k: float(scores_raw.get(k, 0)) for k in domain_keys}
 
         brd_raw = t.get("brd_approval") or t.get("status") or ""
-        brd_approval = _normalize_brd(brd_raw)
+        # 이미 정규화된 값이면 그대로, 아니면 Jira 원시값으로 재매핑
+        if brd_raw in ("Approved", "Pending", "Rejected", "Pre-BRD"):
+            brd_approval = brd_raw
+        else:
+            brd_approval = _normalize_brd(brd_raw)
 
         created_str = (t.get("created") or str(today))[:10]
         try:
@@ -92,6 +97,7 @@ def adapt_tickets(raw: list[dict]) -> list[dict]:
             "problem":        t.get("problem", ""),
             "feature":        t.get("feature", ""),
             "cycle_number":   get_cycle_number(created_date),
+            "was_pending":    t.get("was_pending", False),
             "scores":         scores,
             "priority_score": round(priority_score, 2),
         })
@@ -145,7 +151,7 @@ class DryRunConfluenceClient:
         return "dry-run-space"
 
     def create_page(self, parent_id: str, title: str, html: str) -> dict:
-        safe = title.replace(":", "-").replace(" ", "_")
+        safe = title.replace(":", "-").replace("/", "-").replace("\\", "-").replace(" ", "_")
         out_path = self._out / f"{safe}.html"
         out_path.write_text(html, encoding="utf-8")
         print(f"  [새 페이지] {out_path}  ({len(html):,} chars)")

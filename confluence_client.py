@@ -23,11 +23,33 @@ class ConfluenceClient:
 
     def _post(self, path: str, payload: dict) -> dict:
         r = requests.post(f"{self.base}{path}", auth=self.auth, headers=self.headers, json=payload)
+        if not r.ok:
+            print(f"[Confluence 오류] POST {path}: {r.status_code}\n{r.text[:800]}")
         r.raise_for_status()
         return r.json()
 
+    _space_id_cache: str = ""   # 같은 공간이므로 한 번만 조회 후 캐시
+
     def get_space_id(self, page_id: str) -> str:
-        return self._get(f"/pages/{page_id}")["spaceId"]
+        if ConfluenceClient._space_id_cache:
+            return ConfluenceClient._space_id_cache
+        # v2 API 시도
+        try:
+            sid = self._get(f"/pages/{page_id}")["spaceId"]
+            ConfluenceClient._space_id_cache = sid
+            return sid
+        except Exception:
+            pass
+        # v1 API 폴백: space.key → v2 spaces API로 spaceId 조회
+        base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
+        r = requests.get(f"{base_v1}/content/{page_id}",
+                         auth=self.auth, headers={"Accept": "application/json"})
+        r.raise_for_status()
+        space_key = r.json()["space"]["key"]
+        spaces = self._get("/spaces", {"keys": space_key, "limit": 1})
+        sid = spaces["results"][0]["id"]
+        ConfluenceClient._space_id_cache = sid
+        return sid
 
     def _post_v1(self, path: str, payload: dict) -> dict:
         base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
