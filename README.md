@@ -1,6 +1,6 @@
 # CCI Ticket Analyst
 
-CCIPRJ, KCCIVOC, KEUVOCOP의 Jira 티켓을 자동으로 분석하고 Confluence 문서를 업데이트하는 자동화 도구입니다.
+KCCIVOC, KEUVOCOP의 Jira 티켓을 자동으로 분석하고 Confluence 문서를 업데이트하는 자동화 도구입니다.
 
 ---
 
