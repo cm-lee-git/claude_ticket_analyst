@@ -86,3 +86,32 @@ python main.py --snapshot    # Doc2-1 스냅샷 (회차 마감일에만 실제 �
 - **수동 실행**: 터미널에서 `python main.py --doc1` 등을 직접 실행하거나, GitHub Actions 탭 → Run workflow로도 가능합니다. (단, GitHub Actions는 사내망 접근 불가로 Claude 분석은 동작하지 않으며 Jira 조회까지만 가능할 수 있습니다.)
 - **로그 확인**: `logs/` 폴더에 날짜별 로그 파일이 저장됩니다.
 - **스케줄 변경**: `setup_tasks.ps1`을 수정 후 관리자 권한으로 재실행하세요.
+
+---
+
+## 알림 이메일
+
+Jira 티켓의 상태 변경 및 새 댓글을 자동으로 감지해 이메일로 알립니다.
+
+### 발송 조건
+
+- **실행 시점**: 평일 16:00 KST (CCI_Notify 작업 스케줄러)
+- **조회 범위**: 마지막 발송 시각 ~ 현재
+  - 월요일 16:00: 금요일 16:00 이후(주말 포함)의 변경사항까지 자동 포함
+- **감지 항목**: 상태 변경 + 새 댓글
+
+### 수신자
+
+| 프로젝트 | 수신자 | 참조(CC) |
+|---|---|---|
+| KCCIVOC (KR) | haesoo@innocean.com | rayoun@innocean.com |
+| KEUVOCOP (EU) | jaekim98@innocean.com | rayoun@innocean.com |
+
+- **발신**: cmlee@innocean.com (로컬 Outlook COM 사용 — SMTP 불필요)
+- 프로젝트별로 이메일이 **분리 발송**됩니다 (KCCIVOC 변경사항 / KEUVOCOP 변경사항)
+
+### 주의 사항
+
+- 알림은 **로컬 Outlook이 실행 중인 상태**여야 발송됩니다 (`win32com` 사용)
+- 발송 이력은 `notify_state.json`에 저장되며, 같은 댓글은 중복 발송되지 않습니다
+- 수신자 변경 시 `notify.py`의 `PROJECT_RECIPIENTS` 딕셔너리를 수정하세요
