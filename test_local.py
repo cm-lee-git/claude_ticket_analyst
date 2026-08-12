@@ -3,7 +3,6 @@
 
 사용법:
   python test_local.py --doc1 --dry-run        # HTML 파일만 생성
-  python test_local.py --doc3 --dry-run
   python test_local.py --all  --dry-run
   python test_local.py --doc1                  # 실제 Confluence 쓰기
   python test_local.py --input other.json --doc1 --dry-run
@@ -129,7 +128,6 @@ class DryRunConfluenceClient:
         self._state: dict[str, str] = {
             "doc1": "<html><body></body></html>",
             "doc2": _DOC2_MARKER_HTML,
-            "doc3": "<html><body></body></html>",
         }
 
     def find_page(self, doc_key: str) -> dict:
@@ -190,7 +188,6 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--doc1", action="store_true", help="Doc1 업데이트")
     group.add_argument("--doc2", action="store_true", help="Doc2 업데이트")
-    group.add_argument("--doc3", action="store_true", help="Doc3 업데이트")
     group.add_argument("--all",  action="store_true", help="전체 문서 업데이트")
     parser.add_argument("--dry-run", action="store_true",
                         help="Confluence 쓰기 없이 HTML 파일로 저장 (기본: test_output/)")
@@ -225,7 +222,7 @@ def main():
         print("\n[실제 Confluence 모드]")
 
     # ── 실행 ─────────────────────────────────────────────────────
-    import doc1_updater, doc2_updater, doc3_updater
+    import doc1_updater, doc2_updater
 
     if args.doc1 or args.all:
         print("\n--- Doc1 ---")

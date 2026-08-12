@@ -1,10 +1,10 @@
-name: Doc2/Doc3 현황 업데이트
+name: Doc2 현황 업데이트
 
 on:
   workflow_dispatch:  # 수동 실행만 (자동 스케줄은 Windows 작업 스케줄러로 대체)
 
 jobs:
-  update-doc2-doc3:
+  update-doc2:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -28,15 +28,3 @@ jobs:
           JIRA_FIELD_BRD_STATUS:   ${{ secrets.JIRA_FIELD_BRD_STATUS }}
           JIRA_FIELD_FEATURE_TYPE: ${{ secrets.JIRA_FIELD_FEATURE_TYPE }}
         run: python main.py --doc2
-
-      - name: Doc3 업데이트
-        env:
-          JIRA_EMAIL:              ${{ secrets.JIRA_EMAIL }}
-          JIRA_API_TOKEN:          ${{ secrets.JIRA_API_TOKEN }}
-          CONFLUENCE_EMAIL:        ${{ secrets.CONFLUENCE_EMAIL }}
-          CONFLUENCE_API_TOKEN:    ${{ secrets.CONFLUENCE_API_TOKEN }}
-          ANTHROPIC_API_KEY:       ${{ secrets.ANTHROPIC_API_KEY }}
-          JIRA_FIELD_COUNTRY:      ${{ secrets.JIRA_FIELD_COUNTRY }}
-          JIRA_FIELD_BRD_STATUS:   ${{ secrets.JIRA_FIELD_BRD_STATUS }}
-          JIRA_FIELD_FEATURE_TYPE: ${{ secrets.JIRA_FIELD_FEATURE_TYPE }}
-        run: python main.py --doc3

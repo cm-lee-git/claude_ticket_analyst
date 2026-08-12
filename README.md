@@ -8,9 +8,9 @@ KCCIVOC, KEUVOCOP의 Jira 티켓을 자동으로 분석하고 Confluence 문서�
 
 | 문서 | 업데이트 주기 |
 |---|---|
-| KKR OneApp 주간 보고 (Doc1) | 매주 월요일 10:00 |
-| 신규/개선 전체 현황 (Doc2) | 평일 매일 10:00 |
-| (Kia) 신규/개선 (Doc3) | 평일 매일 10:00 |
+| KKR OneApp 주간 보고 (Doc1) | 매주 월요일 11:00 (전체 재생성) + 화~금 11:00 (신규 추가) |
+| 신규/개선 전체 현황 (Doc2) | 매주 월요일 10:00 (전체 재생성) + 평일 16:00 (신규 업데이트) |
+| 회차별 마감 히스토리 (Doc2-1) | 평일 18:00 자동 확인, 회차 마감일(금요일)에만 생성 |
 
 ---
 
@@ -60,7 +60,7 @@ pip install -r requirements.txt
 
 # 3. .env 파일 생성
 cp .env.example .env
-# .env 파일을 열어 ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN 입력
+# .env 파일을 열어 JIRA_EMAIL, JIRA_API_TOKEN 입력
 
 # 4. 필드 목록 출력
 python main.py --list-fields
@@ -73,16 +73,16 @@ python main.py --list-fields
 터미널에서 직접 실행해 정상 동작을 확인합니다:
 
 ```bash
-python main.py --doc1   # Doc1 즉시 실행
-python main.py --doc2   # Doc2 즉시 실행
-python main.py --doc3   # Doc3 즉시 실행
+python main.py --doc1        # Doc1 즉시 실행
+python main.py --doc2        # Doc2 즉시 실행
+python main.py --snapshot    # Doc2-1 스냅샷 (회차 마감일에만 실제 생성)
 ```
 
 ---
 
 ## 이후 운영
 
-- **자동 실행**: Windows 작업 스케줄러(`run_doc1.bat`, `run_doc2_doc3.bat`)로 실행됩니다. **컴퓨터가 켜져 있고 로그인된 상태**여야 합니다.
+- **자동 실행**: Windows 작업 스케줄러(`setup_tasks.ps1` 실행으로 등록)로 실행됩니다. **컴퓨터가 켜져 있고 로그인된 상태**여야 합니다.
 - **수동 실행**: 터미널에서 `python main.py --doc1` 등을 직접 실행하거나, GitHub Actions 탭 → Run workflow로도 가능합니다. (단, GitHub Actions는 사내망 접근 불가로 Claude 분석은 동작하지 않으며 Jira 조회까지만 가능할 수 있습니다.)
 - **로그 확인**: `logs/` 폴더에 날짜별 로그 파일이 저장됩니다.
-- **스케줄 변경**: Windows 작업 스케줄러에서 `CCI_Doc1_Weekly`, `CCI_Doc2_Doc3_Daily` 작업을 수정하세요.
+- **스케줄 변경**: `setup_tasks.ps1`을 수정 후 관리자 권한으로 재실행하세요.

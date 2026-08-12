@@ -15,7 +15,7 @@ CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-JIRA_PROJECTS = ["CCIPRJ", "KCCIVOC", "KEUVOCOP"]
+JIRA_PROJECTS = ["KCCIVOC", "KEUVOCOP"]
 
 CONFLUENCE_PARENT_PAGE_ID = "68222989"
 
@@ -23,7 +23,6 @@ CONFLUENCE_PARENT_PAGE_ID = "68222989"
 DOC_TEMPLATE_IDS = {
     "doc1": "70156303",   # 복사본: KKR OneApp 주간 보고
     "doc2": "70025250",   # 복사본: 신규/개선 티켓 스크리닝
-    "doc3": "70058046",   # 복사본: (Kia) 신규/개선
 }
 
 # 자동화 업데이트 대상 페이지 ID (AI 생성 폴더)
@@ -31,14 +30,12 @@ DOC_PAGE_IDS = {
     "doc1":  "77529216",   # 1) KKR OneApp 주간 보고 폴더 (AI 생성 [78053444] > 1))
     "doc2":  "78020650",   # 2) 신규/개선 티켓 스크리닝 및 관리 폴더 (AI 생성 > 2))
     "doc21": "77922419",   # 2-1) 회차별 마감 히스토리 폴더 (AI 생성 > 2-1))
-    "doc3":  "71303264",   # AI 생성: (Kia) 신규/개선
 }
 
 # 각 문서 페이지 제목 (부분 일치로 탐색, 폴백용)
 DOC_TITLE_KEYWORDS = {
     "doc1": "KKR",
     "doc2": "신규/개선",       # (Kia) 제외
-    "doc3": "(Kia) 신규/개선",
 }
 
 # Jira 커스텀 필드 ID (.env에서 오버라이드 가능)

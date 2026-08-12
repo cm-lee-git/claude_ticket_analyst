@@ -86,7 +86,7 @@ class ConfluenceClient:
         return data.get("results", [])
 
     def find_page(self, doc_key: str) -> dict:
-        """doc_key ('doc1'|'doc2'|'doc3') 에 해당하는 페이지 메타 반환."""
+        """doc_key ('doc1'|'doc2'|'doc21') 에 해당하는 페이지 메타 반환."""
         if doc_key in self._page_cache:
             return self._page_cache[doc_key]
         page_id = DOC_PAGE_IDS[doc_key]
