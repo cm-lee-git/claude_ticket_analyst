@@ -102,7 +102,7 @@ def cmd_list_fields():
     _check_env()
     jira = JiraClient()
     fields = jira.list_fields()
-    custom = [f for f in fields if f.get("custom")]
+    custom = [f for f in fields if f.get("id", "").startswith("customfield_")]
     print(f"{'ID':<30} {'이름'}")
     print("-" * 60)
     for f in sorted(custom, key=lambda x: x.get("id", "")):
