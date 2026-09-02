@@ -10,15 +10,14 @@ Document 2: 신규/개선 전체 현황 — 새 페이지 생성 방식
 from collections import defaultdict
 from datetime import datetime
 
-from confluence_client import ConfluenceClient
-from config import DOC_PAGE_IDS
+from confluence_client import ConfluenceClient, HmgConfluenceClient
+from config import DOC_PAGE_IDS, HMG_DOC2_PAGE_ID
 from cycle import cycle_label, get_cycle_bounds
 
 JIRA_BROWSE = "https://hmg.atlassian.net/browse"
 
-# Feature 1: 참조 문서 복제 (이전 회차 기록)
-DOC2_REF_PAGE_ID = "94863368"   # 8/17 기준 참조 문서 페이지 ID
-DOC2_REF_CUTOFF  = "2026-08-17" # 이 날짜 이전 생성 티켓 → 참조 문서 행 그대로 복사
+# Feature 1: 참조 문서 복제 — HMG Confluence에서 기존 티켓 행 읽기
+DOC2_REF_PAGE_ID = HMG_DOC2_PAGE_ID  # HMG hmg.atlassian.net 참조 페이지
 
 
 def _key_link(key: str) -> str:
@@ -200,8 +199,8 @@ def _effective_approval(ticket):
     return ticket.get("brd_approval", "")
 
 
-def _load_ref_rows_doc2(client) -> dict[str, str]:
-    """참조 문서(DOC2_REF_PAGE_ID)에서 티켓별 행 HTML 추출.
+def _load_ref_rows_doc2(hmg_client: HmgConfluenceClient) -> dict[str, str]:
+    """HMG Confluence 참조 문서(DOC2_REF_PAGE_ID)에서 티켓별 행 HTML 추출.
     Returns: {ticket_key: rows_html_str}
     참조 실패 시 빈 dict 반환 → 모든 티켓 새로 생성.
     """
@@ -209,7 +208,7 @@ def _load_ref_rows_doc2(client) -> dict[str, str]:
     from bs4 import BeautifulSoup as _BS
     _pat = _re2.compile(r'\b(KCCIVOC|KEUVOCOP|CCIPRJ)-\d+\b')
     try:
-        html, _, _ = client.get_page_storage(DOC2_REF_PAGE_ID)
+        html, _, _ = hmg_client.get_page_storage(DOC2_REF_PAGE_ID)
         soup = _BS(html, 'html.parser')
         result: dict[str, str] = {}
         from collections import defaultdict as _dd
@@ -243,10 +242,10 @@ def _load_ref_rows_doc2(client) -> dict[str, str]:
                     rows.append(str(sib))
                     sib = sib.find_next_sibling('tr')
             result[key] = ''.join(rows)
-        print(f"  [ref_doc2] 참조 문서 {DOC2_REF_PAGE_ID}에서 {len(result)}건 추출")
+        print(f"  [ref_doc2] HMG 참조 문서 {DOC2_REF_PAGE_ID}에서 {len(result)}건 추출")
         return result
     except Exception as e:
-        print(f"  [ref_doc2] 참조 문서 조회 실패 → {e} (전체 새로 생성)")
+        print(f"  [ref_doc2] HMG 참조 문서 조회 실패 → {e} (전체 새로 생성)")
         return {}
 
 
@@ -318,7 +317,7 @@ def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False, ref_r
         seq += 1
         key = t.get("key", "")
         created = t.get("created", "")
-        if ref_rows and key in ref_rows and created < DOC2_REF_CUTOFF:
+        if ref_rows and key in ref_rows:
             rows.append(ref_rows[key])
             continue
         scores = t.get("scores", {})
@@ -388,7 +387,7 @@ def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=
         seq += 1
         key = t.get("key", "")
         created = t.get("created", "")
-        if ref_rows and key in ref_rows and created < DOC2_REF_CUTOFF:
+        if ref_rows and key in ref_rows:
             rows.append(ref_rows[key])
             continue
         hold_code = t.get("hold_code") or ""
@@ -457,7 +456,7 @@ def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows
         seq += 1
         key = t.get("key", "")
         created = t.get("created", "")
-        if ref_rows and key in ref_rows and created < DOC2_REF_CUTOFF:
+        if ref_rows and key in ref_rows:
             rows.append(ref_rows[key])
             continue
         rej_code = t.get("rejection_code") or ""
@@ -531,7 +530,7 @@ def _build_section0():
 
 
 # ── Section 1: 스크리닝 현황 ──────────────────────────────────────
-def _load_ref_tracking_data(client, cutoff_cycle=None):
+def _load_ref_tracking_data(hmg_client: HmgConfluenceClient, cutoff_cycle=None):
     """참조 문서에서 회차별 트래킹 현황 데이터 행과 Total 수치 추출.
     cutoff_cycle: 이 번호 이상의 회차 행은 포함하지 않음 (해당 회차는 직접 계산).
     Returns: {'data_rows': [html_str, ...], 'total_vals': [int×18] or None}
@@ -548,7 +547,7 @@ def _load_ref_tracking_data(client, cutoff_cycle=None):
         return 0   # '-' 및 기타는 0 처리
 
     try:
-        html, _, _ = client.get_page_storage(DOC2_REF_PAGE_ID)
+        html, _, _ = hmg_client.get_page_storage(DOC2_REF_PAGE_ID)
         soup = _BS(html, 'html.parser')
         for table in soup.find_all('table'):
             ttext = table.get_text()
@@ -585,8 +584,8 @@ def _load_ref_tracking_data(client, cutoff_cycle=None):
 
 
 
-def _build_section1(tickets, current_cycle, client=None):
-    _ref_tk = _load_ref_tracking_data(client, cutoff_cycle=current_cycle) if client else {'data_rows': [], 'total_vals': None}
+def _build_section1(tickets, current_cycle, hmg_client=None):
+    _ref_tk = _load_ref_tracking_data(hmg_client, cutoff_cycle=current_cycle) if hmg_client else {'data_rows': [], 'total_vals': None}
     c6      = [t for t in tickets if t.get("cycle_number") == current_cycle]
     has_tk  = bool(_ref_tk.get('data_rows'))
     pend    = ["보류"]
@@ -954,8 +953,9 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
 
-    # Feature 1: 참조 문서에서 이전 티켓 행 추출
-    ref_rows = _load_ref_rows_doc2(client)
+    # Feature 1: HMG Confluence 참조 문서에서 이전 티켓 행 추출
+    hmg_client = HmgConfluenceClient()
+    ref_rows = _load_ref_rows_doc2(hmg_client)
 
     now = datetime.now()
     note_html = (f'<p><em>{now.strftime("%Y-%m-%d %H:%M")} 전체 재생성, '
@@ -966,7 +966,7 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
         '</ac:structured-macro>'
     )
     sections = [note_html, _toc]
-    sections += _build_section1(tickets_with_analysis, current_cycle, client=client)
+    sections += _build_section1(tickets_with_analysis, current_cycle, hmg_client=hmg_client)
     sections += _build_region_section(
         tickets_with_analysis, "KR", 2,
         CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True, ref_rows=ref_rows)
@@ -1035,8 +1035,9 @@ def update_with_new_tickets(tickets_with_analysis: list[dict],
     print(f"[Doc2-Daily] 업데이트 대상: {latest['title']} (id={page_id})")
 
     # 전체 데이터로 페이지 HTML 재구성 후 UPDATE (create 아님)
-    # Feature 1: 참조 문서에서 이전 티켓 행 추출
-    ref_rows = _load_ref_rows_doc2(client)
+    # Feature 1: HMG Confluence 참조 문서에서 이전 티켓 행 추출
+    hmg_client = HmgConfluenceClient()
+    ref_rows = _load_ref_rows_doc2(hmg_client)
 
     now = datetime.now()
     timestamp = as_of if as_of else now.strftime("%m-%d %H:%M")
@@ -1057,7 +1058,7 @@ def update_with_new_tickets(tickets_with_analysis: list[dict],
         '</ac:structured-macro>'
     )
     sections = [note_html, _toc]
-    sections += _build_section1(tickets_with_analysis, current_cycle, client=client)
+    sections += _build_section1(tickets_with_analysis, current_cycle, hmg_client=hmg_client)
     sections += _build_region_section(
         tickets_with_analysis, "KR", 2,
         CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True, ref_rows=ref_rows)

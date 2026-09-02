@@ -173,6 +173,7 @@ class ConfluenceClient:
 
     @staticmethod
     def append_to_section(html: str, marker: str, new_content: str) -> str:
+
         """<p>MARKER_START</p> ~ <p>MARKER_END</p> 사이 끝에 new_content를 추가합니다 (히스토리 누적용)."""
         pattern = rf'(<p>{marker}_START</p>.*?)(<p>{marker}_END</p>)'
         replacement = rf'\1{new_content}\n\2'
@@ -183,3 +184,51 @@ class ConfluenceClient:
                 f"Confluence 페이지에 <p>{marker}_START</p> 마커가 있는지 확인하세요."
             )
         return result
+
+
+class HmgConfluenceClient:
+    """HMG Confluence(hmg.atlassian.net) 읽기 전용 클라이언트.
+    Jira와 동일 인스턴스이므로 JIRA_EMAIL + JIRA_API_TOKEN 재사용.
+    """
+
+    def __init__(self):
+        from config import JIRA_EMAIL, JIRA_API_TOKEN
+        self.base = "https://hmg.atlassian.net/wiki/api/v2"
+        self.auth = HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN)
+        self.headers = {"Accept": "application/json"}
+
+    def get_page_storage(self, page_id: str) -> tuple[str, int, str]:
+        """페이지 Storage Format HTML, 버전 번호, 제목 반환."""
+        r = requests.get(
+            f"{self.base}/pages/{page_id}",
+            auth=self.auth, headers=self.headers,
+            params={"body-format": "storage"},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data["body"]["storage"]["value"], data["version"]["number"], data["title"]
+
+    def get_child_pages(self, folder_id: str) -> list[dict]:
+        """폴더 내 자식 페이지 전체 조회 (최신 수정순, 페이지네이션 포함)."""
+        results: list[dict] = []
+        params: dict = {"parentId": folder_id, "limit": 50, "sort": "-modified"}
+        while True:
+            r = requests.get(
+                f"{self.base}/pages",
+                auth=self.auth, headers=self.headers, params=params,
+            )
+            r.raise_for_status()
+            data = r.json()
+            results.extend(data.get("results", []))
+            nxt = data.get("_links", {}).get("next", "")
+            if not nxt:
+                break
+            cursor = None
+            for part in nxt.split("&"):
+                if "cursor=" in part:
+                    cursor = part.split("cursor=")[-1]
+                    break
+            if not cursor:
+                break
+            params = {"parentId": folder_id, "limit": 50, "sort": "-modified", "cursor": cursor}
+        return results

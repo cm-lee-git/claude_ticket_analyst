@@ -89,3 +89,8 @@ EU_COUNTRIES = {
     "Belgium", "Poland", "Portugal", "Sweden", "Norway",
     "Denmark", "Finland", "Austria", "Switzerland", "UK",
 }
+
+# HMG Confluence 참조 페이지 (읽기 전용, Jira 인증 재사용)
+HMG_DOC1_FOLDER_3Q = os.getenv("HMG_DOC1_FOLDER_3Q", "362152825")  # KR_2026_3Q 폴더 (7~9월)
+HMG_DOC1_FOLDER_Q4 = os.getenv("HMG_DOC1_FOLDER_Q4", "362152798")  # 0. 2026 KR Weekly Ticket 폴더 (10~12월)
+HMG_DOC2_PAGE_ID   = os.getenv("HMG_DOC2_PAGE_ID",   "589030689")  # 신규/개선 전체 현황 참조 페이지

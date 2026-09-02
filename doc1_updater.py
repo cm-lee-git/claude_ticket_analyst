@@ -9,8 +9,8 @@ import json
 import os
 from datetime import datetime, date
 from bs4 import BeautifulSoup, Tag
-from confluence_client import ConfluenceClient
-from config import DOC_PAGE_IDS
+from confluence_client import ConfluenceClient, HmgConfluenceClient
+from config import DOC_PAGE_IDS, HMG_DOC1_FOLDER_3Q, HMG_DOC1_FOLDER_Q4
 from cycle import cycle_label
 
 # ─── 상수 ────────────────────────────────────────────────────────────────────
@@ -39,9 +39,7 @@ COL_WIDTHS = [51, 70, 182, 242, 93, 100, 98, 475, 147, 129, 105, 107]
 
 JIRA_BROWSE = "https://hmg.atlassian.net/browse"
 
-# Feature 1: 참조 문서 복제 (이전 회차 기록)
-DOC1_REF_PAGE_ID = "93061205"   # 8/19 기준 참조 문서 페이지 ID
-DOC1_REF_CUTOFF  = "2026-08-17" # 이 날짜 이전 생성 티켓 → 참조 문서 행 그대로 복사 (Cycle 6 시작일, 이후 티켓은 항상 신규 생성)
+# Feature 1: 참조 문서 복제 — HMG Confluence 폴더에서 최신 페이지 자동 탐색
 
 # Pending 관리 표 열 너비 (원본 참조 문서 기준)
 PENDING_COL_WIDTHS = [78, 138, 412, 108, 110, 134, 129, 591, 83]
@@ -215,13 +213,33 @@ def _make_table(soup: BeautifulSoup) -> tuple[Tag, Tag]:
 
 # ─── 참조 문서 행 추출 ──────────────────────────────────────────────────────
 
-def _load_ref_rows_doc1(client: ConfluenceClient) -> dict[str, list[str]]:
-    """참조 문서(DOC1_REF_PAGE_ID)에서 티켓별 행 HTML 추출.
+def _find_hmg_doc1_ref_page(hmg_client: HmgConfluenceClient) -> str | None:
+    """분기에 맞는 HMG Confluence 폴더에서 가장 최근 수정된 자식 페이지 ID 반환."""
+    month = datetime.now().month
+    folder_id = HMG_DOC1_FOLDER_Q4 if month >= 10 else HMG_DOC1_FOLDER_3Q
+    try:
+        pages = hmg_client.get_child_pages(folder_id)
+        if not pages:
+            print(f"  [hmg_doc1] 폴더 {folder_id} 자식 페이지 없음")
+            return None
+        latest = pages[0]  # sort=-modified → 첫 번째가 최신
+        print(f"  [hmg_doc1] 최신 참조 페이지: {latest['title']} (id={latest['id']})")
+        return latest["id"]
+    except Exception as e:
+        print(f"  [hmg_doc1] 폴더 탐색 실패: {e}")
+        return None
+
+
+def _load_ref_rows_doc1(hmg_client: HmgConfluenceClient) -> dict[str, list[str]]:
+    """HMG Confluence 최신 주간 보고 페이지에서 티켓별 행 HTML 추출.
     Returns: {ticket_key: [row_html_str, ...]}
     참조 실패 시 빈 dict 반환 → 모든 티켓 새로 생성.
     """
     try:
-        html, _, _ = client.get_page_storage(DOC1_REF_PAGE_ID)
+        page_id = _find_hmg_doc1_ref_page(hmg_client)
+        if not page_id:
+            return {}
+        html, _, title = hmg_client.get_page_storage(page_id)
         soup = BeautifulSoup(html, 'html.parser')
         result: dict[str, list[str]] = {}
         for a in soup.find_all('a', href=True):
@@ -248,10 +266,10 @@ def _load_ref_rows_doc1(client: ConfluenceClient) -> dict[str, list[str]]:
                     rows.append(str(sib))
                     sib = sib.find_next_sibling('tr')
             result[key] = rows
-        print(f"  [ref_doc1] 참조 문서 {DOC1_REF_PAGE_ID}에서 {len(result)}건 추출")
+        print(f"  [ref_doc1] HMG '{title}'에서 {len(result)}건 추출")
         return result
     except Exception as e:
-        print(f"  [ref_doc1] 참조 문서 조회 실패 → {e} (전체 새로 생성)")
+        print(f"  [ref_doc1] HMG 참조 조회 실패 → {e} (전체 새로 생성)")
         return {}
 
 
@@ -559,7 +577,7 @@ def _build_pre_brd_table(soup: BeautifulSoup, pre_brd: list[dict],
     for ticket in pre_brd:
         seq += 1
         key = ticket.get('key', '')
-        if ref_rows and key in ref_rows and ticket.get('created', '') < DOC1_REF_CUTOFF:
+        if ref_rows and key in ref_rows:
             # 참조 문서 행 복사 — Ticket Summary는 항상 Jira 원본 타이틀로 덮어씀
             for i, row_html in enumerate(ref_rows[key]):
                 tr = BeautifulSoup(row_html, 'html.parser').find('tr')
@@ -581,7 +599,7 @@ def _build_post_brd_table(soup: BeautifulSoup, post_brd: list[dict],
     for ticket in post_brd:
         seq += 1
         key = ticket.get('key', '')
-        if ref_rows and key in ref_rows and ticket.get('created', '') < DOC1_REF_CUTOFF:
+        if ref_rows and key in ref_rows:
             # 참조 문서 행 복사 — Ticket Summary는 항상 Jira 원본 타이틀로 덮어씀
             for i, row_html in enumerate(ref_rows[key]):
                 tr = BeautifulSoup(row_html, 'html.parser').find('tr')
@@ -871,8 +889,9 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     pre_brd, post_brd = _split_tickets(kr_tickets)
 
-    # Feature 1: 참조 문서에서 이전 티켓 행 추출
-    ref_rows = _load_ref_rows_doc1(client)
+    # Feature 1: HMG Confluence에서 이전 티켓 행 추출
+    hmg_client = HmgConfluenceClient()
+    ref_rows = _load_ref_rows_doc1(hmg_client)
 
     now = datetime.now()
     soup = BeautifulSoup("", 'html.parser')
