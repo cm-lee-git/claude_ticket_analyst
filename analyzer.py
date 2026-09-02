@@ -1,16 +1,45 @@
 import json
-import anthropic
+import os
+import httpx
 from config import ANTHROPIC_API_KEY, SCORE_KEYS_FOR_PRIORITY
 from jira_client import JiraClient
 
-_client = None
+_ENDPOINT: str = ""
 
 
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    return _client
+def _get_endpoint() -> str:
+    """h-chat(사내 프록시) 또는 Anthropic 기본 엔드포인트 반환.
+
+    ANTHROPIC_BASE_URL이 /messages로 끝나면 그대로 사용(h-chat 전체 URL).
+    그렇지 않으면 /v1/messages를 덧붙임 (표준 Anthropic 패턴).
+    """
+    global _ENDPOINT
+    if not _ENDPOINT:
+        base = os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/")
+        if base:
+            _ENDPOINT = base if base.endswith("/messages") else f"{base}/v1/messages"
+        else:
+            _ENDPOINT = "https://api.anthropic.com/v1/messages"
+    return _ENDPOINT
+
+
+def _call_claude(system_prompt: str, user_msg: str) -> str:
+    """h-chat 또는 Anthropic API에 직접 POST하여 텍스트 응답 반환."""
+    endpoint = _get_endpoint()
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 1500,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_msg}],
+    }
+    resp = httpx.post(endpoint, headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()["content"][0]["text"].strip()
 
 
 SYSTEM_PROMPT = """당신은 INNOCEAN GBCXD팀의 CCI Digital Platform 티켓 분석 전문가입니다.
@@ -20,16 +49,21 @@ Jira 티켓 정보를 받아 아래 JSON 형식으로만 응답하세요. 설명
 - status_info: 티켓의 현재 처리 상태나 진행 현황이 있을 경우 기술 (BRD 제출·승인·반려, ICT 검토, 개발 진행 중 등)
   없으면 null. 있으면 핵심 포인트를 \\n으로 구분
   예) "BRD Confirmed, ICT 전달 완료\\n2026 Q3 개발 목표"
-- summary_ko: 티켓이 무엇을 요청·개선·추가하는지 설명. 반드시 동사로 끝나거나 '~한 티켓.'으로 끝낼 것
+- summary_ko: 고객 경험·화면 UI 관점에서 변경 전후를 대비하여 작성. 반드시 동사로 끝나거나 '~하는 티켓.'으로 끝낼 것
   현재 처리 상태(BRD 상태, 승인 여부, 개발 진행 여부 등)는 절대 포함하지 않음
-  예) "정비예약 화면에서 예약 안내 사항을 더 쉽게 인지할 수 있도록 플로우를 변경하는 티켓."
-  예) "Kia App에 원격진단 기능을 추가 요청하는 티켓."
+  작성 순서:
+    1. 현재 상태: 고객이 현재 어떤 화면·플로우·불편을 경험하는지 (AS-IS)
+    2. 변경 후 상태: 어떤 화면·플로우·기능으로 달라지는지 — 고객 입장의 변화 중심 (TO-BE)
+  두 상태를 명확히 대비해서 1~2문장으로 작성.
+  예) "현재 정비예약 화면에서 예약 안내 사항이 하단에 작게 표시돼 고객이 미처 확인하지 못하는 상황이며, 예약 완료 직후 팝업으로 안내 사항을 노출하도록 화면 플로우를 개선하는 티켓."
+  예) "현재 차량 결함 발생 시 고객이 서비스센터에 직접 방문해야 하는 상황이며, 앱에서 선제 진단 알람을 수신하고 OTA 업데이트로 처리 가능하도록 원격진단 기능을 추가하는 티켓."
+  예) "현재 충전 지도 화면에 현재 위치가 표시되지 않아 고객이 수동으로 위치를 검색해야 하며, 지도 진입 시 현재 위치를 자동으로 표시하도록 UI를 개선하는 티켓."
 - background / problem / feature: 각 핵심 포인트를 개행(\\n)으로 구분하여 2~4개 작성
   예) "주요 배경 포인트 A\\n주요 배경 포인트 B\\n주요 배경 포인트 C"
 
 {
   "status_info": "현재 처리 상태 포인트1\\n포인트2 (없으면 null)",
-  "summary_ko": "티켓 요청·개선 내용 설명, 동사로 끝나거나 '~한 티켓.'으로 끝남 (현재 상태 제외)",
+  "summary_ko": "현재 고객 경험(AS-IS) → 변경 후 화면·플로우(TO-BE) 대비, 1~2문장, 동사로 끝남 (BRD 상태 제외)",
   "background": "핵심 배경 포인트1\\n핵심 배경 포인트2 (한국어, \\n 구분)",
   "problem": "핵심 문제 포인트1\\n핵심 문제 포인트2 (한국어, \\n 구분)",
   "feature_label": "기존 기능 개선 또는 신규 기능 중 하나",
@@ -260,14 +294,7 @@ BRD 상태: {ticket['brd_status_raw']}
     desc_len = len(ticket.get('description', ''))
     print(f"  [claude-in]  {ticket['key']}: description={desc_len}자, summary={ticket['summary'][:40]!r}")
 
-    client = _get_client()
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1500,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    raw = response.content[0].text.strip()
+    raw = _call_claude(SYSTEM_PROMPT, user_msg)
     print(f"  [claude-out] {ticket['key']}: {raw[:200]!r}")
     try:
         parsed = json.loads(raw)

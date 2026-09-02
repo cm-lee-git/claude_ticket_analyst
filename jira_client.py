@@ -52,12 +52,15 @@ class JiraClient:
     def _search(self, jql: str) -> list[dict]:
         # POST /search/jql: 현행 Jira Cloud 표준 엔드포인트, nextPageToken 페이지네이션
         fields = [
-            "summary", "reporter", "created",
+            "summary", "reporter", "creator", "created",
             "status", "issuetype", "description",
+            "subtasks",              # 그룹 티켓 식별용
             JIRA_FIELDS["country"],
             JIRA_FIELDS["brand"],    # 대상 브랜드: Kia, Common
             JIRA_FIELDS["brand2"],   # Brand: KMC, ALL
             JIRA_FIELDS["due_date"], # Due Date (customfield_10570)
+            JIRA_FIELDS["end_date"], # End date (customfield_10185)
+            "labels",
         ]
         results = []
         payload = {"jql": jql, "maxResults": 50, "fields": fields}
@@ -176,12 +179,19 @@ class JiraClient:
         project = issue["key"].split("-")[0]
         description = self._extract_text(f.get("description"))
         print(f"  [normalize] {issue['key']}: description {len(description)}자")
+        # 그룹 티켓: subtasks 필드에 하위 작업이 있는 경우
+        subtasks_raw = f.get("subtasks") or []
+        subtask_keys = [s["key"] for s in subtasks_raw if s.get("key")]
+
         return {
             "key":            issue["key"],
             "summary":        summary,
             "reporter":       (f.get("reporter") or {}).get("displayName", ""),
+            "initiator":      (f.get("creator") or {}).get("displayName", ""),
             "created":        (f.get("created") or "")[:10],
             "due_date":       f.get(JIRA_FIELDS["due_date"]) or "",
+            "end_date":       f.get(JIRA_FIELDS["end_date"]) or "",
+            "labels":         f.get("labels") or [],
             "status":         (f.get("status") or {}).get("name", ""),
             "description":    description,
             "country":        country_raw,
@@ -190,6 +200,9 @@ class JiraClient:
             "brd_status_raw": brd_raw,
             "brd_approval":   BRD_STATUS_MAP.get(brd_raw, "보류"),
             "feature_type":   feature_type,
+            "is_fast_track":  feature_type == "Urgent Request",
+            "is_group":       bool(subtask_keys),
+            "subtask_keys":   subtask_keys,
         }
 
     @staticmethod

@@ -1,34 +1,23 @@
+# 인증 정보
 .env
+
+# 런타임 상태 파일
+notify_state.json
+notify_state.json.bak
+tickets_analyzed_latest.json
+
+# 로그
+logs/
+
+# Python 캐시
 __pycache__/
 *.pyc
 *.pyo
-.venv/
-venv/
 
-# 런타임 상태 파일 (자동 생성, 커밋 불필요)
-logs/
-notify_state.json
-tickets_analyzed_latest.json
-cycle_snapshots.json
+# 임시/작업 파일
+_*.py
+_*.html
+*.html
 
-# 개발/디버깅용 임시 파일
-analyze_tables.py
-col_widths.json
-doc2_expands.json
-doc2_raw.html
-doc2_reference.html
-doc2_tables.json
-doc3_raw.html
-extract_fewshot.py
-extract_fewshot2.py
-fetch_jira_details.py
-fewshot_data.json
-fewshot_full_report.txt
-fewshot_report.txt
-insert_markers.py
-inspect_html.py
-pages_list.json
-search_result.json
-test_multi_cycle.json
-test_output/
-python
+# Windows 아티팩트
+nul

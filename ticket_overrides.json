@@ -1,0 +1,14 @@
+{
+  "_comment": "참조 문서(hmg) 기준 기존 티켓 오버라이드. 새 티켓에는 적용되지 않음.",
+  "cycle_overrides": {
+    "KCCIVOC-6735": 1
+  },
+  "brd_approval_overrides": {
+    "KCCIVOC-6735": "반려",
+    "KCCIVOC-6826": "보류"
+  },
+  "excluded_keys": [
+    "KCCIVOC-6856",
+    "KCCIVOC-6847"
+  ]
+}

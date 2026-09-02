@@ -52,9 +52,9 @@ def _cnt(tickets, region_set, approval=None):
     result = [t for t in tickets if t.get("region") in region_set]
     if approval:
         if isinstance(approval, list):
-            result = [t for t in result if t.get("brd_approval") in approval]
+            result = [t for t in result if _effective_approval(t) in approval]
         else:
-            result = [t for t in result if t.get("brd_approval") == approval]
+            result = [t for t in result if _effective_approval(t) == approval]
     return len(result)
 
 
@@ -121,17 +121,17 @@ def _build_history_html(snapshots: dict) -> str:
     return toc + "<h1>회차별 마감 히스토리</h1>" + table
 
 
-def _create_doc21_page(client: ConfluenceClient, html: str):
+def _create_doc21_page(client: ConfluenceClient, html: str, as_of: str | None = None):
     """Doc2-1 페이지를 타임스탬프 제목으로 새로 생성 (Doc1/Doc2와 동일 방식)."""
     from datetime import datetime as _dt
-    timestamp = _dt.now().strftime("%m-%d %H:%M")
+    timestamp = as_of if as_of else _dt.now().strftime("%m-%d %H:%M")
     title = DOC11_TITLE_FMT.format(timestamp=timestamp)
     parent_id = DOC_PAGE_IDS["doc21"]
     result = client.create_page(parent_id, title, html)
     print(f"[Doc2-1] 새 페이지 생성: {title}  (id={result.get('id', '')})")
 
 
-def take_snapshot(force_cycle: int | None = None):
+def take_snapshot(force_cycle: int | None = None, as_of: str | None = None):
     """
     force_cycle: 테스트용 — 특정 회차 번호를 강제 지정 (None이면 오늘 날짜 자동 판별)
     """
@@ -145,7 +145,9 @@ def take_snapshot(force_cycle: int | None = None):
     print(f"[Snapshot] {cycle_n}회차 마감 스냅샷 생성 ({start}~{end})")
 
     jira = JiraClient()
-    tickets = jira.get_new_improvement_tickets(extra_jql='created >= "2026-01-01"')
+    tickets = jira.get_new_improvement_tickets(
+        extra_jql=f'created >= "2026-01-01" AND created <= "{end}"'
+    )
 
     # cycle_number 부여
     from datetime import date as _date
@@ -228,4 +230,4 @@ def take_snapshot(force_cycle: int | None = None):
     # Doc2-1 페이지 새로 생성
     html = _build_history_html(snapshots)
     client = ConfluenceClient()
-    _create_doc21_page(client, html)
+    _create_doc21_page(client, html, as_of=as_of)

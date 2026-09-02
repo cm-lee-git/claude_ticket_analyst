@@ -26,11 +26,19 @@ if (-not (Test-Path $SnapshotBat))  { Write-Error "run_snapshot.bat 없음: $Sna
 if (-not (Test-Path $NotifyBat))    { Write-Error "run_notify.bat 없음: $NotifyBat"; exit 1 }
 
 # ── 공통 설정 ───────────────────────────────────────────────────────
+# Daily: 예약 시간 놓쳤으면 켜지는 즉시 실행
 $Settings = New-ScheduledTaskSettingsSet `
     -WakeToRun `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
     -MultipleInstances IgnoreNew `
-    -StartWhenAvailable     # 예약 시간에 꺼져 있었으면 켜지는 즉시 실행
+    -StartWhenAvailable
+
+# Weekly: StartWhenAvailable 제거 — 부팅 직후 조기 실행 시 S4U 인증 실패 방지
+# 월요일 예약 시각에 PC가 켜져 있어야 실행됨
+$WeeklySettings = New-ScheduledTaskSettingsSet `
+    -WakeToRun `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
+    -MultipleInstances IgnoreNew
 
 $Principal = New-ScheduledTaskPrincipal `
     -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
@@ -53,7 +61,7 @@ Register-ScheduledTask `
     -Description "CCI KKR OneApp 주간 보고 전체 재생성 (매주 월 11:00)" `
     -Trigger $Trigger1 `
     -Action $Action1 `
-    -Settings $Settings `
+    -Settings $WeeklySettings `
     -Principal $Principal | Out-Null
 Write-Host "[OK] CCI_Doc1_Weekly 등록 완료 (매주 월요일 11:00)"
 
@@ -103,7 +111,7 @@ Register-ScheduledTask `
     -Description "CCI 신규/개선 전체 현황 전체 재생성 (매주 월 10:00)" `
     -Trigger $Trigger2 `
     -Action $Action2 `
-    -Settings $Settings `
+    -Settings $WeeklySettings `
     -Principal $Principal | Out-Null
 Write-Host "[OK] CCI_Doc2_Weekly 등록 완료 (매주 월요일 10:00)"
 

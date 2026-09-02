@@ -16,6 +16,10 @@ from cycle import cycle_label, get_cycle_bounds
 
 JIRA_BROWSE = "https://hmg.atlassian.net/browse"
 
+# Feature 1: 참조 문서 복제 (이전 회차 기록)
+DOC2_REF_PAGE_ID = "94863368"   # 8/17 기준 참조 문서 페이지 ID
+DOC2_REF_CUTOFF  = "2026-08-17" # 이 날짜 이전 생성 티켓 → 참조 문서 행 그대로 복사
+
 
 def _key_link(key: str) -> str:
     """Jira 티켓 키 → 하이퍼링크 HTML."""
@@ -176,13 +180,74 @@ def _cycle_expand_title(cycle_n):
     return f"#Cycle {cycle_n} ({start.year}. {start.month}/{start.day}~{end.month}/{end.day})"
 
 
+def _reporter_html(reporter: str, initiator: str, rs: int = 6) -> str:
+    """Reporter + 발의자 셀 HTML."""
+    content = f"<p>{reporter}</p>"
+    if initiator:
+        content += f"<p><em>(발의: {initiator})</em></p>"
+    return f'<td rowspan="{rs}">{content}</td>'
+
+
 def _effective_approval(ticket):
-    """분석 결과(rejection_code/hold_code)를 우선 반영한 최종 승인 상태."""
+    """분석 결과(rejection_code/hold_code)를 우선 반영한 최종 승인 상태.
+    Pre-BRD(cycle_number == 0) 티켓은 hold_code 판단 대상 제외.
+    """
     if ticket.get("rejection_code"):
         return "반려"
-    if ticket.get("hold_code"):
+    is_prebrd = ticket.get("cycle_number", 0) == 0
+    if ticket.get("hold_code") and not is_prebrd:
         return "보류"
     return ticket.get("brd_approval", "")
+
+
+def _load_ref_rows_doc2(client) -> dict[str, str]:
+    """참조 문서(DOC2_REF_PAGE_ID)에서 티켓별 행 HTML 추출.
+    Returns: {ticket_key: rows_html_str}
+    참조 실패 시 빈 dict 반환 → 모든 티켓 새로 생성.
+    """
+    import re as _re2
+    from bs4 import BeautifulSoup as _BS
+    _pat = _re2.compile(r'\b(KCCIVOC|KEUVOCOP|CCIPRJ)-\d+\b')
+    try:
+        html, _, _ = client.get_page_storage(DOC2_REF_PAGE_ID)
+        soup = _BS(html, 'html.parser')
+        result: dict[str, str] = {}
+        from collections import defaultdict as _dd
+        # 1패스: 키별 후보 수집 — <li> 내 참조 링크 제외, rowspan 기록
+        all_matches: dict[str, list] = _dd(list)
+        for a in soup.find_all('a', href=True):
+            if a.find_parent('li'):
+                continue  # 내용/배경/문제 열의 참조 링크 건너뜀
+            href = a.get('href', '')
+            text = a.get_text(strip=True)
+            m = _pat.search(href) or _pat.search(text)
+            if not m:
+                continue
+            key = m.group()
+            tr = a.find_parent('tr')
+            if not tr:
+                continue
+            first_td = tr.find(['td', 'th'])
+            try:
+                rowspan = int(first_td.get('rowspan', '1')) if first_td else 1
+            except (ValueError, TypeError):
+                rowspan = 1
+            all_matches[key].append((rowspan, tr))
+        # 2패스: 키별로 rowspan이 가장 큰 행(= 티켓 블록 첫 행) 선택
+        for key, matches in all_matches.items():
+            best_rowspan, best_tr = max(matches, key=lambda x: x[0])
+            rows = [str(best_tr)]
+            sib = best_tr.find_next_sibling('tr')
+            for _ in range(best_rowspan - 1):
+                if sib:
+                    rows.append(str(sib))
+                    sib = sib.find_next_sibling('tr')
+            result[key] = ''.join(rows)
+        print(f"  [ref_doc2] 참조 문서 {DOC2_REF_PAGE_ID}에서 {len(result)}건 추출")
+        return result
+    except Exception as e:
+        print(f"  [ref_doc2] 참조 문서 조회 실패 → {e} (전체 새로 생성)")
+        return {}
 
 
 def _cnt(tickets, region=None, approval=None, transition=None):
@@ -212,7 +277,7 @@ def _get_all_cycles(tickets):
 
 
 # ── 승인 티켓 테이블 (rowspan=6 스코어링, KR 12열 / EU·HQ 11열) ───
-def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False):
+def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False, ref_rows=None):
     tickets = sorted(tickets, key=lambda t: t.get("created", ""))
     if not tickets:
         return _no_tickets(prebrd=is_prebrd)
@@ -248,7 +313,14 @@ def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False):
         return "".join(parts)
 
     rows = [header]
-    for seq, t in enumerate(tickets, 1):
+    seq = 0
+    for t in tickets:
+        seq += 1
+        key = t.get("key", "")
+        created = t.get("created", "")
+        if ref_rows and key in ref_rows and created < DOC2_REF_CUTOFF:
+            rows.append(ref_rows[key])
+            continue
         scores = t.get("scores", {})
         priority = str(sum(1 for k in SCORE_KEYS[1:] if float(scores.get(k, 0)) > 0))
         brd_val = "" if is_prebrd else APPROVAL_LABEL.get(_effective_approval(t), "")
@@ -260,10 +332,10 @@ def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False):
             f"<tr>"
             f'{td_rs(str(seq))}'
             f'{cycle_col}'
-            f'<td rowspan="6"><p>{_key_link(t.get("key", ""))}</p></td>'
+            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
             f'{td_rs(t.get("summary", ""))}'
-            f'{td_rs(t.get("reporter", ""))}'
-            f'{td_rs(t.get("created", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
+            f'{td_rs(created)}'
             f'{td_rs(t.get("due_date", ""))}'
             f'<td rowspan="6">{content_html}</td>'
             f'<td><p>{SCORE_LABELS[0]}</p></td>'
@@ -285,7 +357,7 @@ def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False):
 
 
 # ── 보류 티켓 테이블 (rowspan=6, 항목 분포 포함) ─────────────────
-def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False):
+def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=None):
     tickets = sorted(tickets, key=lambda t: t.get("created", ""))
     if not tickets:
         return _no_tickets(prebrd=prebrd)
@@ -311,7 +383,14 @@ def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False):
         return f'<td rowspan="{rs}"><p>{text}</p></td>'
 
     rows = [header]
-    for seq, t in enumerate(tickets, 1):
+    seq = 0
+    for t in tickets:
+        seq += 1
+        key = t.get("key", "")
+        created = t.get("created", "")
+        if ref_rows and key in ref_rows and created < DOC2_REF_CUTOFF:
+            rows.append(ref_rows[key])
+            continue
         hold_code = t.get("hold_code") or ""
         reason = t.get("hold_reason") or (t.get("background", "")[:150] if hold_code else "")
         scores = t.get("scores", {})
@@ -321,10 +400,10 @@ def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False):
             f"<tr>"
             f'{td_rs(str(seq))}'
             f'{cycle_col}'
-            f'<td rowspan="6"><p>{_key_link(t.get("key", ""))}</p></td>'
+            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
             f'{td_rs(t.get("summary", ""))}'
-            f'{td_rs(t.get("reporter", ""))}'
-            f'{td_rs(t.get("created", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
+            f'{td_rs(created)}'
             f'{td_rs(t.get("due_date", ""))}'
             f'{td_rs(hold_code)}'
             f'{td_rs(reason)}'
@@ -347,7 +426,7 @@ def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False):
 
 
 # ── 반려 티켓 테이블 (rowspan=6, 항목 분포 포함) ─────────────────
-def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False):
+def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=None):
     tickets = sorted(tickets, key=lambda t: t.get("created", ""))
     if not tickets:
         return _no_tickets(prebrd=prebrd)
@@ -373,7 +452,14 @@ def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False):
         return f'<td rowspan="{rs}"><p>{text}</p></td>'
 
     rows = [header]
-    for seq, t in enumerate(tickets, 1):
+    seq = 0
+    for t in tickets:
+        seq += 1
+        key = t.get("key", "")
+        created = t.get("created", "")
+        if ref_rows and key in ref_rows and created < DOC2_REF_CUTOFF:
+            rows.append(ref_rows[key])
+            continue
         rej_code = t.get("rejection_code") or ""
         reason = t.get("rejection_reason") or (t.get("problem", "")[:150] if rej_code else "")
         scores = t.get("scores", {})
@@ -383,10 +469,10 @@ def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False):
             f"<tr>"
             f'{td_rs(str(seq))}'
             f'{cycle_col}'
-            f'<td rowspan="6"><p>{_key_link(t.get("key", ""))}</p></td>'
+            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
             f'{td_rs(t.get("summary", ""))}'
-            f'{td_rs(t.get("reporter", ""))}'
-            f'{td_rs(t.get("created", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
+            f'{td_rs(created)}'
             f'{td_rs(t.get("due_date", ""))}'
             f'{td_rs(rej_code)}'
             f'{td_rs(reason)}'
@@ -445,9 +531,105 @@ def _build_section0():
 
 
 # ── Section 1: 스크리닝 현황 ──────────────────────────────────────
-def _build_section1(tickets, current_cycle):
+def _load_ref_tracking_data(client, cutoff_cycle=None):
+    """참조 문서에서 회차별 트래킹 현황 데이터 행과 Total 수치 추출.
+    cutoff_cycle: 이 번호 이상의 회차 행은 포함하지 않음 (해당 회차는 직접 계산).
+    Returns: {'data_rows': [html_str, ...], 'total_vals': [int×18] or None}
+    """
+    import re as _re
+    from bs4 import BeautifulSoup as _BS
+    _cpat = _re.compile(r'Pre-BRD|\d+회차')
+    _cycnum_pat = _re.compile(r'^(\d+)회차')
+
+    def _cell_int(cell):
+        t = cell.get_text(strip=True)
+        if _re.match(r'^\d+$', t):
+            return int(t)
+        return 0   # '-' 및 기타는 0 처리
+
+    try:
+        html, _, _ = client.get_page_storage(DOC2_REF_PAGE_ID)
+        soup = _BS(html, 'html.parser')
+        for table in soup.find_all('table'):
+            ttext = table.get_text()
+            if '보류 중' not in ttext or '승인 전환' not in ttext:
+                continue
+            rows = table.find_all('tr')
+            data_rows, total_vals, had_filtered = [], None, False
+            for tr in rows:
+                cells = tr.find_all(['td', 'th'])
+                if not cells:
+                    continue
+                first = cells[0].get_text(strip=True)
+                if _cpat.search(first):
+                    if cutoff_cycle is not None:
+                        m = _cycnum_pat.match(first)
+                        if m and int(m.group(1)) >= cutoff_cycle:
+                            had_filtered = True
+                            continue  # 현재 회차 이상 제외 → 직접 계산으로 대체
+                    data_rows.append(str(tr))
+                elif first == 'Total':
+                    nums = [_cell_int(c) for c in cells[1:]]
+                    if len(nums) >= 18:
+                        total_vals = nums[:18]
+            # 필터로 제거된 행이 있으면 ref Total도 신뢰 불가 (해당 회차 포함됐을 수 있음)
+            if had_filtered:
+                total_vals = None
+            if data_rows:
+                print(f"  [ref_tracking] {len(data_rows)}개 행, total={'있음' if total_vals else '없음'}"
+                      + (f" (cutoff={cutoff_cycle}회차 이상 제외)" if had_filtered else ""))
+                return {'data_rows': data_rows, 'total_vals': total_vals}
+    except Exception as e:
+        print(f"  [ref_tracking] 실패: {e}")
+    return {'data_rows': [], 'total_vals': None}
+
+
+
+def _build_section1(tickets, current_cycle, client=None):
+    _ref_tk = _load_ref_tracking_data(client, cutoff_cycle=current_cycle) if client else {'data_rows': [], 'total_vals': None}
+    c6      = [t for t in tickets if t.get("cycle_number") == current_cycle]
+    has_tk  = bool(_ref_tk.get('data_rows'))
+    pend    = ["보류"]
+
+    # ── 18개 집계값 (KR×6 + EU×6 + HQ×6) ─────────────────────────
+    # 각 영역: [인입, 승인직접, 반려직접, 보류중, 승인전환, 반려전환]
+    def _mk6(reg, src):
+        return [
+            _cnt(src, reg),
+            _cnt(src, reg, "Approved", "direct"),
+            _cnt(src, reg, "반려",     "direct"),
+            _cnt(src, reg, pend),
+            _cnt(src, reg, "Approved", "converted"),
+            _cnt(src, reg, "반려",     "converted"),
+        ]
+
+    c6_vals = _mk6(_KR_REGIONS, c6) + _mk6(_EU_REGIONS, c6) + _mk6(_HQ_REGIONS, c6)
+
+    ref_tv = _ref_tk.get('total_vals')
+    if ref_tv and len(ref_tv) >= 18:
+        agg = [ref_tv[i] + c6_vals[i] for i in range(18)]
+    else:
+        # 폴백: 전체 티켓에서 18개 직접 계산
+        agg = _mk6(_KR_REGIONS, tickets) + _mk6(_EU_REGIONS, tickets) + _mk6(_HQ_REGIONS, tickets)
+
+    def _ov(off):
+        """offset별 종합 현황 4항목: (인입, 승인, 반려, 보류).
+        승인 = 직접+전환, 반려 = 직접+전환, 보류 = 보류중+승인전환+반려전환.
+        """
+        v = agg
+        return (
+            v[off],                         # 인입
+            v[off+1] + v[off+4],            # 승인 (직접 + 전환)
+            v[off+2] + v[off+5],            # 반려 (직접 + 전환)
+            v[off+3] + v[off+4] + v[off+5], # 보류 (보류중 + 승인전환 + 반려전환)
+        )
+
+    kr_ov  = _ov(0)
+    eu_ov  = _ov(6)
+    hq_ov  = _ov(12)
+    tot_ov = tuple(kr_ov[i] + eu_ov[i] + hq_ov[i] for i in range(4))
+
     # ── 종합 현황 표 (6열) ─────────────────────────────────────────
-    # 헤더행: colspan=2 빈 셀(회색) + 항목명 4개(흰 볼드, 회색)
     h_row = (
         "<tr>"
         + _c("th", "", bg=GREY, cs=2)
@@ -457,55 +639,48 @@ def _build_section1(tickets, current_cycle):
         + _c("th", "보류",        bg=GREY, bold_white=True)
         + "</tr>"
     )
-    # Total 행: colspan=2 회색 볼드 + 연회색 데이터
     total_row = (
         "<tr>"
         + _c("td", "Total", bg=GREY, cs=2, bold_white=True)
-        + _c("td", str(_cnt(tickets)),                         bg=LIGHT_GREY)
-        + _c("td", str(_cnt(tickets, approval="Approved")),    bg=LIGHT_GREY)
-        + _c("td", str(_cnt(tickets, approval="반려")),    bg=LIGHT_GREY)
-        + _c("td", str(_cnt(tickets, approval=["보류"])), bg=LIGHT_GREY)
+        + _c("td", str(tot_ov[0]), bg=LIGHT_GREY)
+        + _c("td", str(tot_ov[1]), bg=LIGHT_GREY)
+        + _c("td", str(tot_ov[2]), bg=LIGHT_GREY)
+        + _c("td", str(tot_ov[3]), bg=LIGHT_GREY)
         + "</tr>"
     )
-    # RHQ KR 행: KR + Global 포함
     kr_row = (
         "<tr>"
         + _c("td", "RHQ", bg=GREY, rs=2, bold_white=True)
         + _c("td", "KR",  bg=GREY, bold_white=True)
-        + _c("td", str(_cnt(tickets, _KR_REGIONS)))
-        + _c("td", str(_cnt(tickets, _KR_REGIONS, "Approved")))
-        + _c("td", str(_cnt(tickets, _KR_REGIONS, "반려")))
-        + _c("td", str(_cnt(tickets, _KR_REGIONS, ["보류"])))
+        + _c("td", str(kr_ov[0]))
+        + _c("td", str(kr_ov[1]))
+        + _c("td", str(kr_ov[2]))
+        + _c("td", str(kr_ov[3]))
         + "</tr>"
     )
-    # EU 행: EU + Global 포함
     eu_row = (
         "<tr>"
         + _c("td", "EU", bg=GREY, bold_white=True)
-        + _c("td", str(_cnt(tickets, _EU_REGIONS)))
-        + _c("td", str(_cnt(tickets, _EU_REGIONS, "Approved")))
-        + _c("td", str(_cnt(tickets, _EU_REGIONS, "반려")))
-        + _c("td", str(_cnt(tickets, _EU_REGIONS, ["보류"])))
+        + _c("td", str(eu_ov[0]))
+        + _c("td", str(eu_ov[1]))
+        + _c("td", str(eu_ov[2]))
+        + _c("td", str(eu_ov[3]))
         + "</tr>"
     )
-    # HQ 행: HQ만 (Global 제외)
     hq_row = (
         "<tr>"
         + _c("td", "HQ",             bg=GREY, bold_white=True)
         + _c("td", "GBCXD 및 타부문", bg=GREY, bold_white=True)
-        + _c("td", str(_cnt(tickets, _HQ_REGIONS)))
-        + _c("td", str(_cnt(tickets, _HQ_REGIONS, "Approved")))
-        + _c("td", str(_cnt(tickets, _HQ_REGIONS, "반려")))
-        + _c("td", str(_cnt(tickets, _HQ_REGIONS, ["보류"])))
+        + _c("td", str(hq_ov[0]))
+        + _c("td", str(hq_ov[1]))
+        + _c("td", str(hq_ov[2]))
+        + _c("td", str(hq_ov[3]))
         + "</tr>"
     )
     overall_table = _table(CW["section1_overall"],
                            [h_row, total_row, kr_row, eu_row, hq_row])
 
     # ── 회차별 트래킹 표 (19열, 4행 헤더) ──────────────────────────
-    # 포함 대상: Pre-BRD(0) + 모든 회차
-    all_cycles = sorted({t.get("cycle_number", 0) for t in tickets})
-
     # 헤더 4행
     track_h1 = (
         "<tr>"
@@ -554,83 +729,158 @@ def _build_section1(tickets, current_cycle):
         + "</tr>"
     )
 
-    # 데이터 행: 회차별 (첫 셀 <th grey 볼드>, 나머지 <td>)
+    # 데이터 행 + Total 행
     def _dash(n: int) -> str:
         return "-" if n == 0 else str(n)
 
-    track_data = []
-    pend = ["보류"]
-    for cn in all_cycles:
-        cyc = [t for t in tickets if t.get("cycle_number") == cn]
-        def _s(reg=None, appr=None, trans=None, _cyc=cyc):
-            return _dash(_cnt(_cyc, reg, appr, transition=trans))
-        row = (
+    if has_tk:
+        # 참조 문서에서 Pre-BRD~이전 회차 행 복제, 현재 회차만 직접 계산
+        def _sc6(reg=None, appr=None, trans=None):
+            return _dash(_cnt(c6, reg, appr, transition=trans))
+
+        c6_row = (
             "<tr>"
-            + _c("th", _track_label(cn), bg=GREY, bold_white=True)
-            # KR: 인입, 승인(직접), 반려(직접), 보류중, 승인전환, 반려전환
-            + _c("td", _s(_KR_REGIONS))
-            + _c("td", _s(_KR_REGIONS, "Approved",  "direct"))
-            + _c("td", _s(_KR_REGIONS, "반려",  "direct"))
-            + _c("td", _s(_KR_REGIONS, pend))
-            + _c("td", _s(_KR_REGIONS, "Approved",  "converted"))
-            + _c("td", _s(_KR_REGIONS, "반려",  "converted"))
-            # EU
-            + _c("td", _s(_EU_REGIONS))
-            + _c("td", _s(_EU_REGIONS, "Approved",  "direct"))
-            + _c("td", _s(_EU_REGIONS, "반려",  "direct"))
-            + _c("td", _s(_EU_REGIONS, pend))
-            + _c("td", _s(_EU_REGIONS, "Approved",  "converted"))
-            + _c("td", _s(_EU_REGIONS, "반려",  "converted"))
-            # HQ
-            + _c("td", _s(_HQ_REGIONS))
-            + _c("td", _s(_HQ_REGIONS, "Approved",  "direct"))
-            + _c("td", _s(_HQ_REGIONS, "반려",  "direct"))
-            + _c("td", _s(_HQ_REGIONS, pend))
-            + _c("td", _s(_HQ_REGIONS, "Approved",  "converted"))
-            + _c("td", _s(_HQ_REGIONS, "반려",  "converted"))
+            + _c("th", _track_label(current_cycle), bg=GREY, bold_white=True)
+            + _c("td", _sc6(_KR_REGIONS))
+            + _c("td", _sc6(_KR_REGIONS, "Approved",  "direct"))
+            + _c("td", _sc6(_KR_REGIONS, "반려",      "direct"))
+            + _c("td", _sc6(_KR_REGIONS, pend))
+            + _c("td", _sc6(_KR_REGIONS, "Approved",  "converted"))
+            + _c("td", _sc6(_KR_REGIONS, "반려",      "converted"))
+            + _c("td", _sc6(_EU_REGIONS))
+            + _c("td", _sc6(_EU_REGIONS, "Approved",  "direct"))
+            + _c("td", _sc6(_EU_REGIONS, "반려",      "direct"))
+            + _c("td", _sc6(_EU_REGIONS, pend))
+            + _c("td", _sc6(_EU_REGIONS, "Approved",  "converted"))
+            + _c("td", _sc6(_EU_REGIONS, "반려",      "converted"))
+            + _c("td", _sc6(_HQ_REGIONS))
+            + _c("td", _sc6(_HQ_REGIONS, "Approved",  "direct"))
+            + _c("td", _sc6(_HQ_REGIONS, "반려",      "direct"))
+            + _c("td", _sc6(_HQ_REGIONS, pend))
+            + _c("td", _sc6(_HQ_REGIONS, "Approved",  "converted"))
+            + _c("td", _sc6(_HQ_REGIONS, "반려",      "converted"))
             + "</tr>"
         )
-        track_data.append(row)
+        track_data = list(_ref_tk['data_rows']) + [c6_row]
 
-    # Total 행: 회색 볼드 라벨 + 연파란 데이터
-    def _st(reg, appr=None, trans=None):
-        return _dash(_cnt(tickets, reg, appr, transition=trans))
-    total_track = (
-        "<tr>"
-        + _c("th", "Total", bg=GREY, bold_white=True)
-        + _c("td", _st(_KR_REGIONS),                            bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_KR_REGIONS, "Approved",  "direct"),    bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_KR_REGIONS, "반려",  "direct"),    bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_KR_REGIONS, pend),                     bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_KR_REGIONS, "Approved",  "converted"), bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_KR_REGIONS, "반려",  "converted"), bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_EU_REGIONS),                            bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_EU_REGIONS, "Approved",  "direct"),    bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_EU_REGIONS, "반려",  "direct"),    bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_EU_REGIONS, pend),                     bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_EU_REGIONS, "Approved",  "converted"), bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_EU_REGIONS, "반려",  "converted"), bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_HQ_REGIONS),                            bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_HQ_REGIONS, "Approved",  "direct"),    bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_HQ_REGIONS, "반려",  "direct"),    bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_HQ_REGIONS, pend),                     bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_HQ_REGIONS, "Approved",  "converted"), bg=TOTAL_BLUE, bold=True)
-        + _c("td", _st(_HQ_REGIONS, "반려",  "converted"), bg=TOTAL_BLUE, bold=True)
-        + "</tr>"
-    )
+        # Total = ref 누적 + c6
+        ref_tv = _ref_tk.get('total_vals')
+        c6_vals = [
+            _cnt(c6, _KR_REGIONS),                               # KR 인입
+            _cnt(c6, _KR_REGIONS, "Approved",  "direct"),
+            _cnt(c6, _KR_REGIONS, "반려",      "direct"),
+            _cnt(c6, _KR_REGIONS, pend),
+            _cnt(c6, _KR_REGIONS, "Approved",  "converted"),
+            _cnt(c6, _KR_REGIONS, "반려",      "converted"),
+            _cnt(c6, _EU_REGIONS),                               # EU 인입
+            _cnt(c6, _EU_REGIONS, "Approved",  "direct"),
+            _cnt(c6, _EU_REGIONS, "반려",      "direct"),
+            _cnt(c6, _EU_REGIONS, pend),
+            _cnt(c6, _EU_REGIONS, "Approved",  "converted"),
+            _cnt(c6, _EU_REGIONS, "반려",      "converted"),
+            _cnt(c6, _HQ_REGIONS),                               # HQ 인입
+            _cnt(c6, _HQ_REGIONS, "Approved",  "direct"),
+            _cnt(c6, _HQ_REGIONS, "반려",      "direct"),
+            _cnt(c6, _HQ_REGIONS, pend),
+            _cnt(c6, _HQ_REGIONS, "Approved",  "converted"),
+            _cnt(c6, _HQ_REGIONS, "반려",      "converted"),
+        ]
+        if ref_tv and len(ref_tv) >= 18:
+            nt = [_dash(ref_tv[i] + c6_vals[i]) for i in range(18)]
+        else:
+            # ref Total 신뢰 불가(필터로 제거됨 또는 없음) → 전체 캐시 기반 agg 사용
+            nt = [_dash(v) for v in agg]
+
+        total_track = (
+            "<tr>"
+            + _c("th", "Total", bg=GREY, bold_white=True)
+            + _c("td", nt[0],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[1],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[2],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[3],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[4],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[5],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[6],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[7],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[8],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[9],  bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[10], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[11], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[12], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[13], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[14], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[15], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[16], bg=TOTAL_BLUE, bold=True)
+            + _c("td", nt[17], bg=TOTAL_BLUE, bold=True)
+            + "</tr>"
+        )
+    else:
+        # 폴백: 티켓 데이터에서 직접 계산
+        all_cycles = sorted({t.get("cycle_number", 0) for t in tickets})
+        track_data = []
+        for cn in all_cycles:
+            cyc = [t for t in tickets if t.get("cycle_number") == cn]
+            def _s(reg=None, appr=None, trans=None, _cyc=cyc):
+                return _dash(_cnt(_cyc, reg, appr, transition=trans))
+            row = (
+                "<tr>"
+                + _c("th", _track_label(cn), bg=GREY, bold_white=True)
+                + _c("td", _s(_KR_REGIONS))
+                + _c("td", _s(_KR_REGIONS, "Approved",  "direct"))
+                + _c("td", _s(_KR_REGIONS, "반려",      "direct"))
+                + _c("td", _s(_KR_REGIONS, pend))
+                + _c("td", _s(_KR_REGIONS, "Approved",  "converted"))
+                + _c("td", _s(_KR_REGIONS, "반려",      "converted"))
+                + _c("td", _s(_EU_REGIONS))
+                + _c("td", _s(_EU_REGIONS, "Approved",  "direct"))
+                + _c("td", _s(_EU_REGIONS, "반려",      "direct"))
+                + _c("td", _s(_EU_REGIONS, pend))
+                + _c("td", _s(_EU_REGIONS, "Approved",  "converted"))
+                + _c("td", _s(_EU_REGIONS, "반려",      "converted"))
+                + _c("td", _s(_HQ_REGIONS))
+                + _c("td", _s(_HQ_REGIONS, "Approved",  "direct"))
+                + _c("td", _s(_HQ_REGIONS, "반려",      "direct"))
+                + _c("td", _s(_HQ_REGIONS, pend))
+                + _c("td", _s(_HQ_REGIONS, "Approved",  "converted"))
+                + _c("td", _s(_HQ_REGIONS, "반려",      "converted"))
+                + "</tr>"
+            )
+            track_data.append(row)
+
+        def _st(reg, appr=None, trans=None):
+            return _dash(_cnt(tickets, reg, appr, transition=trans))
+        total_track = (
+            "<tr>"
+            + _c("th", "Total", bg=GREY, bold_white=True)
+            + _c("td", _st(_KR_REGIONS),                            bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_KR_REGIONS, "Approved",  "direct"),    bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_KR_REGIONS, "반려",      "direct"),    bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_KR_REGIONS, pend),                     bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_KR_REGIONS, "Approved",  "converted"), bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_KR_REGIONS, "반려",      "converted"), bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_EU_REGIONS),                            bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_EU_REGIONS, "Approved",  "direct"),    bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_EU_REGIONS, "반려",      "direct"),    bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_EU_REGIONS, pend),                     bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_EU_REGIONS, "Approved",  "converted"), bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_EU_REGIONS, "반려",      "converted"), bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_HQ_REGIONS),                            bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_HQ_REGIONS, "Approved",  "direct"),    bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_HQ_REGIONS, "반려",      "direct"),    bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_HQ_REGIONS, pend),                     bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_HQ_REGIONS, "Approved",  "converted"), bg=TOTAL_BLUE, bold=True)
+            + _c("td", _st(_HQ_REGIONS, "반려",      "converted"), bg=TOTAL_BLUE, bold=True)
+            + "</tr>"
+        )
 
     tracking_table = _table(CW["section1_tracking"],
                             [track_h1, track_h2, track_h3, track_h4]
                             + track_data + [total_track])
 
     # 회차별 마감 히스토리 섹션 (표 자체는 Doc2-1 별도 페이지에 생성)
-    doc21_folder_id = DOC_PAGE_IDS["doc21"]
-    doc21_link = (
-        f'<ac:link><ri:page ri:content-title="2-1) 회차별 마감 히스토리"/></ac:link>'
-    )
     history_section = (
         _h3("■ 회차별 마감 히스토리")
-        + _p(f'참고: {doc21_link}')
+        + _p('참고: 회차별 마감 히스토리')
     )
 
     return [
@@ -646,7 +896,7 @@ def _build_section1(tickets, current_cycle):
 
 # ── Section 2-4: 지역별 티켓 히스토리 ────────────────────────────
 def _build_region_section(tickets, region_code, section_num, approved_widths,
-                          pending_widths, rejected_widths, has_cycle_col):
+                          pending_widths, rejected_widths, has_cycle_col, ref_rows=None):
     # Global 티켓은 KR+EU 섹션 모두에 포함, HQ는 HQ만
     region_tickets = [t for t in tickets if t.get("region") in {
         "KR": _KR_REGIONS, "EU": _EU_REGIONS, "HQ": _HQ_REGIONS
@@ -673,57 +923,63 @@ def _build_region_section(tickets, region_code, section_num, approved_widths,
     # 승인 티켓
     parts.append(_p_bold(f"{section_num}.1. 승인 티켓"))
     parts.append(_expand("Pre-BRD",
-        _build_approved_table(_filter(0, "Approved"), approved_widths, has_cycle_col, is_prebrd=True)))
+        _build_approved_table(_filter(0, "Approved"), approved_widths, has_cycle_col, is_prebrd=True, ref_rows=ref_rows)))
     for cn in cycles:
         parts.append(_expand(_cycle_expand_title(cn),
-            _build_approved_table(_filter(cn, "Approved"), approved_widths, has_cycle_col)))
+            _build_approved_table(_filter(cn, "Approved"), approved_widths, has_cycle_col, ref_rows=ref_rows)))
 
     # 보류 티켓: Pending 상태만 (BRD 제출 후 공식 보류; Pre-BRD 미제출 티켓 제외)
     parts.append(_p_bold(f"{section_num}.2. 보류 티켓"))
     parts.append(_expand("Pre-BRD",
-        _build_pending_table(_filter(0, "Pending"), pending_widths, has_cycle_col, prebrd=True)))
+        _build_pending_table(_filter(0, "Pending"), pending_widths, has_cycle_col, prebrd=True, ref_rows=ref_rows)))
     for cn in cycles:
         parts.append(_expand(_cycle_expand_title(cn),
-            _build_pending_table(_filter(cn, "Pending"), pending_widths, has_cycle_col)))
+            _build_pending_table(_filter(cn, "Pending"), pending_widths, has_cycle_col, ref_rows=ref_rows)))
 
     # 반려 티켓
     parts.append(_p_bold(f"{section_num}.3. 반려 티켓"))
     parts.append(_expand("Pre-BRD",
-        _build_rejected_table(_filter(0, "반려"), rejected_widths, has_cycle_col, prebrd=True)))
+        _build_rejected_table(_filter(0, "반려"), rejected_widths, has_cycle_col, prebrd=True, ref_rows=ref_rows)))
     for cn in cycles:
         parts.append(_expand(_cycle_expand_title(cn),
-            _build_rejected_table(_filter(cn, "반려"), rejected_widths, has_cycle_col)))
+            _build_rejected_table(_filter(cn, "반려"), rejected_widths, has_cycle_col, ref_rows=ref_rows)))
 
     return parts
 
 
 # ── 메인 업데이트 함수 ──────────────────────────────────────────
-def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = None):
+def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = None, as_of: str | None = None):
     if client is None:
         client = ConfluenceClient()
 
     current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
 
+    # Feature 1: 참조 문서에서 이전 티켓 행 추출
+    ref_rows = _load_ref_rows_doc2(client)
+
+    now = datetime.now()
+    note_html = (f'<p><em>{now.strftime("%Y-%m-%d %H:%M")} 전체 재생성, '
+                 f'총 {len(tickets_with_analysis)}건</em></p>')
     _toc = (
         '<ac:structured-macro ac:name="toc" ac:schema-version="1">'
         '<ac:parameter ac:name="style">none</ac:parameter>'
         '</ac:structured-macro>'
     )
-    sections = [_toc]
-    sections += _build_section1(tickets_with_analysis, current_cycle)
+    sections = [note_html, _toc]
+    sections += _build_section1(tickets_with_analysis, current_cycle, client=client)
     sections += _build_region_section(
         tickets_with_analysis, "KR", 2,
-        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True)
+        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True, ref_rows=ref_rows)
     sections += _build_region_section(
         tickets_with_analysis, "EU", 3,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
     sections += _build_region_section(
         tickets_with_analysis, "HQ", 4,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
 
     html = "\n".join(sections)
 
-    timestamp = datetime.now().strftime("%m-%d %H:%M")
+    timestamp = as_of if as_of else now.strftime("%m-%d %H:%M")
     title = f"{timestamp} 신규/개선 전체 현황 (AI 생성)"
     parent_id = DOC_PAGE_IDS["doc2"]
 
@@ -734,7 +990,9 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
 
 def update_with_new_tickets(tickets_with_analysis: list[dict],
-                            client: ConfluenceClient | None = None):
+                            client: ConfluenceClient | None = None,
+                            new_ticket_keys: list[str] | None = None,
+                            as_of: str | None = None):
     """월 16시, 화~금 16시: 당일 신규 티켓 있으면 기존 최신 페이지를 전체 재구성하여 업데이트."""
     if client is None:
         client = ConfluenceClient()
@@ -743,36 +1001,75 @@ def update_with_new_tickets(tickets_with_analysis: list[dict],
         print("[Doc2-Daily] 당일 신규 티켓 없음 → 종료")
         return
 
-    # 기존 최신 doc2 페이지 찾기 (제목 내림차순)
-    children = client.get_child_pages(DOC_PAGE_IDS["doc2"])
-    if not children:
+    # 기존 최신 doc2 페이지 찾기 — 제목 패턴 필터 후 내림차순
+    # 폴더에 수백 개 자식이 있으므로 전체 페이지네이션 후 패턴 필터링
+    all_children: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params: dict = {"parentId": DOC_PAGE_IDS["doc2"], "limit": 50}
+        if cursor:
+            params["cursor"] = cursor
+        data = client._get("/pages", params=params)
+        all_children.extend(data.get("results", []))
+        nxt = data.get("_links", {}).get("next", "")
+        if not nxt:
+            break
+        # cursor 값 추출
+        for part in nxt.split("&"):
+            if part.startswith("cursor=") or "cursor=" in part:
+                cursor = part.split("cursor=")[-1]
+                break
+        else:
+            break
+
+    # 자동 생성 doc2 페이지만 필터 (제목 패턴: "MM-DD HH:MM 신규/개선 전체 현황 (AI 생성)")
+    import re as _re
+    _AI_TITLE_RE = _re.compile(r"^\d{2}-\d{2} \d{2}:\d{2} 신규/개선 전체 현황 \(AI 생성\)$")
+    matched = [p for p in all_children if _AI_TITLE_RE.match(p["title"])]
+    if not matched:
         print("[Doc2-Daily] 기존 페이지 없음 → 종료")
         return
-    latest = sorted(children, key=lambda p: p["title"], reverse=True)[0]
+    latest = sorted(matched, key=lambda p: p["title"], reverse=True)[0]
     page_id = latest["id"]
-    _, version, title = client.get_page_storage(page_id)
-    print(f"[Doc2-Daily] 업데이트 대상: {title} (id={page_id})")
+    _, version, _ = client.get_page_storage(page_id)
+    print(f"[Doc2-Daily] 업데이트 대상: {latest['title']} (id={page_id})")
 
     # 전체 데이터로 페이지 HTML 재구성 후 UPDATE (create 아님)
+    # Feature 1: 참조 문서에서 이전 티켓 행 추출
+    ref_rows = _load_ref_rows_doc2(client)
+
+    now = datetime.now()
+    timestamp = as_of if as_of else now.strftime("%m-%d %H:%M")
+    note_dt = f"2026-{as_of}" if as_of else now.strftime("%Y-%m-%d %H:%M")
     current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
+
+    if new_ticket_keys:
+        keys_str = ', '.join(new_ticket_keys)
+        note_text = (f"{note_dt} {len(new_ticket_keys)}개의 티켓 추가, "
+                     f"티켓 key: {keys_str}")
+    else:
+        note_text = f"{note_dt} 업데이트 (총 {len(tickets_with_analysis)}건)"
+    note_html = f'<p><em>{note_text}</em></p>'
+
     _toc = (
         '<ac:structured-macro ac:name="toc" ac:schema-version="1">'
         '<ac:parameter ac:name="style">none</ac:parameter>'
         '</ac:structured-macro>'
     )
-    sections = [_toc]
-    sections += _build_section1(tickets_with_analysis, current_cycle)
+    sections = [note_html, _toc]
+    sections += _build_section1(tickets_with_analysis, current_cycle, client=client)
     sections += _build_region_section(
         tickets_with_analysis, "KR", 2,
-        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True)
+        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True, ref_rows=ref_rows)
     sections += _build_region_section(
         tickets_with_analysis, "EU", 3,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
     sections += _build_region_section(
         tickets_with_analysis, "HQ", 4,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
     html = "\n".join(sections)
 
-    client.update_page(page_id, title, html, version,
-                       message=f"Daily: 신규 {len(tickets_with_analysis)}건 반영")
-    print(f"[Doc2-Daily] 완료  총 {len(tickets_with_analysis)}건 → 페이지 업데이트")
+    new_title = f"{timestamp} 신규/개선 전체 현황 (AI 생성)"
+    client.update_page(page_id, new_title, html, version,
+                       message=f"Daily: 신규 {len(new_ticket_keys) if new_ticket_keys else len(tickets_with_analysis)}건 반영")
+    print(f"[Doc2-Daily] 완료  총 {len(tickets_with_analysis)}건 → {new_title}")

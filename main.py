@@ -109,51 +109,62 @@ def cmd_list_fields():
         print(f"{f['id']:<30} {f.get('name', '')}")
 
 
-def cmd_doc1():
+_WEEKLY_JQL = (
+    'created >= "2026-01-01" '
+    'AND status not in ("Dropped", "해결됨", "종료", "RESOLVE", "Deployed")'
+)
+
+
+def cmd_doc1(as_of: str | None = None):
     """월요일: 전체 티켓 재빌드 후 새 페이지 생성."""
     _check_env()
+    jira = JiraClient()
     tickets = _fetch_and_analyze(
-        extra_jql='created >= "2026-01-01"',
+        extra_jql=_WEEKLY_JQL,
         save_path="tickets_analyzed_latest.json",
     )
-    doc1_updater.update(tickets, ConfluenceClient())
+    doc1_updater.update(tickets, ConfluenceClient(), as_of=as_of, jira_client=jira)
 
 
-def cmd_doc1_daily():
+def cmd_doc1_daily(as_of: str | None = None, from_date: str | None = None):
     """화~금: 당일 생성된 신규 티켓만 기존 페이지에 추가."""
     _check_env()
-    from datetime import timedelta
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
+    from datetime import timedelta, date as _date
+    d = _date.fromisoformat(from_date) if from_date else date.today()
+    tomorrow = d + timedelta(days=1)
     extra_jql = (
         f'created >= "2026-01-01" '
-        f'AND created >= "{today.isoformat()}" '
+        f'AND created >= "{d.isoformat()}" '
         f'AND created < "{tomorrow.isoformat()}"'
     )
     tickets = _fetch_and_analyze(extra_jql=extra_jql)
-    doc1_updater.append_new_tickets(tickets, ConfluenceClient())
+    doc1_updater.append_new_tickets(tickets, ConfluenceClient(), as_of=as_of)
 
 
-def cmd_doc2():
+def cmd_doc2(as_of: str | None = None):
     """월요일 10시: 전체 티켓 재빌드 후 새 페이지 생성."""
     _check_env()
     tickets = _fetch_and_analyze(
-        extra_jql='created >= "2026-01-01"',
+        extra_jql=_WEEKLY_JQL,
         save_path="tickets_analyzed_latest.json",
     )
-    doc2_updater.update(tickets, ConfluenceClient())
+    doc2_updater.update(tickets, ConfluenceClient(), as_of=as_of)
 
 
-def cmd_doc2_daily():
-    """월 16시, 화~금 16시: 당일 신규 티켓 있으면 전체 분석 + 기존 페이지 업데이트."""
+def cmd_doc2_daily(as_of: str | None = None, from_date: str | None = None,
+                   use_cache: bool = False):
+    """월 16시, 화~금 16시: 당일 신규 티켓 있으면 전체 분석 + 기존 페이지 업데이트.
+
+    use_cache: True이면 tickets_analyzed_latest.json 재사용 (Claude 분석 생략).
+    """
     _check_env()
     import json, pathlib
-    from datetime import timedelta
+    from datetime import timedelta, date as _date
 
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
+    d = _date.fromisoformat(from_date) if from_date else date.today()
+    tomorrow = d + timedelta(days=1)
     today_jql = (
-        f'created >= "{today.isoformat()}" '
+        f'created >= "{d.isoformat()}" '
         f'AND created < "{tomorrow.isoformat()}"'
     )
     full_jql = 'created >= "2026-01-01"'
@@ -164,33 +175,49 @@ def cmd_doc2_daily():
     new_today = jira_check.get_new_improvement_tickets(
         extra_jql=f'{today_jql}'
     )
-    if not new_today:
+    if not new_today and not as_of:
         print("[Doc2-Daily] 당일 신규 티켓 없음 → 종료")
         return
-    print(f"[Doc2-Daily] 당일 신규 티켓 {len(new_today)}건 감지 → 전체 분석 시작")
+    if new_today:
+        print(f"[Doc2-Daily] 당일 신규 티켓 {len(new_today)}건 감지")
+    else:
+        print("[Doc2-Daily] 신규 티켓 없음 (타임스탬프 업데이트만 수행)")
 
-    # 전체 분석 (신규 티켓 분석 비용 감수, 정확성 우선)
-    all_tickets = _fetch_and_analyze(
-        extra_jql=full_jql,
-        save_path="tickets_analyzed_latest.json",
-    )
-    doc2_updater.update_with_new_tickets(all_tickets, ConfluenceClient())
+    new_today_keys = [t.get("key", "") for t in new_today if t.get("key")]
+
+    # 캐시 모드: tickets_analyzed_latest.json 재사용
+    cache_path = pathlib.Path("tickets_analyzed_latest.json")
+    if use_cache and cache_path.exists():
+        print(f"[Doc2-Daily] 캐시 사용 → {cache_path} ({cache_path.stat().st_size // 1024}KB)")
+        all_tickets = json.loads(cache_path.read_text(encoding="utf-8"))
+    else:
+        # 전체 분석 (신규 티켓 분석 비용 감수, 정확성 우선)
+        print("[Doc2-Daily] 전체 분석 시작")
+        all_tickets = _fetch_and_analyze(
+            extra_jql=full_jql,
+            save_path="tickets_analyzed_latest.json",
+        )
+
+    doc2_updater.update_with_new_tickets(all_tickets, ConfluenceClient(),
+                                         new_ticket_keys=new_today_keys,
+                                         as_of=as_of)
 
 
-def cmd_snapshot(force_cycle=None):
+def cmd_snapshot(force_cycle=None, as_of: str | None = None):
     """회차 마감일 18:00 스냅샷 — 오늘이 마감일이 아니면 자동 종료."""
     _check_env()
-    snapshot_module.take_snapshot(force_cycle=force_cycle)
+    snapshot_module.take_snapshot(force_cycle=force_cycle, as_of=as_of)
 
 
 def cmd_all():
     _check_env()
+    jira = JiraClient()
     tickets = _fetch_and_analyze(
-        extra_jql='created >= "2026-01-01"',
+        extra_jql=_WEEKLY_JQL,
         save_path="tickets_analyzed_latest.json",
     )
     client = ConfluenceClient()
-    doc1_updater.update(tickets, client)
+    doc1_updater.update(tickets, client, jira_client=jira)
     doc2_updater.update(tickets, client)
 
 
@@ -202,23 +229,34 @@ if __name__ == "__main__":
     group.add_argument("--snapshot",     action="store_true", help="회차별 마감 히스토리 스냅샷 (회차 마감일 18시)")
     parser.add_argument("--force-cycle", type=int, default=None, metavar="N",
                         help="--snapshot 테스트용: 특정 회차 번호 강제 지정 (기본: 오늘 날짜 자동 판별)")
+    parser.add_argument("--timestamp", type=str, default=None, metavar="MM-DD HH:MM",
+                        help="페이지 제목 타임스탬프 오버라이드 (예: '08-19 11:00'). 미지정 시 현재 시각 사용")
+    parser.add_argument("--from-date", type=str, default=None, metavar="YYYY-MM-DD",
+                        help="daily 명령의 JQL 날짜 오버라이드 (예: '2026-08-25'). 미지정 시 오늘")
+    parser.add_argument("--use-cache", action="store_true",
+                        help="--doc2-daily: tickets_analyzed_latest.json 재사용, Claude 분석 생략")
     group.add_argument("--doc2",         action="store_true", help="Doc2 월요일 전체 재생성")
     group.add_argument("--doc2-daily",   action="store_true", help="Doc2 월16시·화~금16시 신규 티켓 업데이트")
     group.add_argument("--all",          action="store_true", help="전체 문서 업데이트 (Doc1+Doc2)")
     group.add_argument("--list-fields",  action="store_true", help="Jira 커스텀 필드 목록 출력")
+    group.add_argument("--delete-page",  type=str, metavar="PAGE_ID", help="Confluence 페이지 영구 삭제")
     args = parser.parse_args()
 
-    if args.list_fields:
+    if args.delete_page:
+        _check_env()
+        ConfluenceClient().delete_page(args.delete_page)
+    elif args.list_fields:
         cmd_list_fields()
     elif args.doc1:
-        cmd_doc1()
+        cmd_doc1(as_of=args.timestamp)
     elif args.doc1_daily:
-        cmd_doc1_daily()
+        cmd_doc1_daily(as_of=args.timestamp, from_date=args.from_date)
     elif args.snapshot:
-        cmd_snapshot(force_cycle=args.force_cycle)
+        cmd_snapshot(force_cycle=args.force_cycle, as_of=args.timestamp)
     elif args.doc2:
-        cmd_doc2()
+        cmd_doc2(as_of=args.timestamp)
     elif args.doc2_daily:
-        cmd_doc2_daily()
+        cmd_doc2_daily(as_of=args.timestamp, from_date=args.from_date,
+                       use_cache=args.use_cache)
     elif args.all:
         cmd_all()

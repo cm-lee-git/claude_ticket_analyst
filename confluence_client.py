@@ -29,23 +29,33 @@ class ConfluenceClient:
         return r.json()
 
     _space_id_cache: str = ""   # 같은 공간이므로 한 번만 조회 후 캐시
+    _space_key_cache: str = ""  # v1 API 폴백용 space key 캐시
 
     def get_space_id(self, page_id: str) -> str:
         if ConfluenceClient._space_id_cache:
             return ConfluenceClient._space_id_cache
         # v2 API 시도
         try:
-            sid = self._get(f"/pages/{page_id}")["spaceId"]
+            data = self._get(f"/pages/{page_id}")
+            sid = data["spaceId"]
             ConfluenceClient._space_id_cache = sid
+            # space key도 같이 확보 (v1 폴백용)
+            try:
+                space_data = self._get(f"/spaces/{sid}")
+                ConfluenceClient._space_key_cache = space_data.get("key", "")
+            except Exception:
+                pass
             return sid
         except Exception:
             pass
         # v1 API 폴백: space.key → v2 spaces API로 spaceId 조회
         base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
         r = requests.get(f"{base_v1}/content/{page_id}",
-                         auth=self.auth, headers={"Accept": "application/json"})
+                         auth=self.auth, headers={"Accept": "application/json"},
+                         params={"expand": "space"})
         r.raise_for_status()
         space_key = r.json()["space"]["key"]
+        ConfluenceClient._space_key_cache = space_key
         spaces = self._get("/spaces", {"keys": space_key, "limit": 1})
         sid = spaces["results"][0]["id"]
         ConfluenceClient._space_id_cache = sid
@@ -58,31 +68,53 @@ class ConfluenceClient:
         return r.json()
 
     def create_page(self, parent_id: str, title: str, html: str) -> dict:
-        """parent_id 하위에 새 페이지 생성 (간격 넓게 포함)."""
+        """parent_id 하위에 새 페이지 생성 (간격 넓게 포함). v2 실패 시 v1 폴백."""
         space_id = self.get_space_id(parent_id)
-        result = self._post("/pages", {
-            "spaceId": space_id,
-            "status": "current",
-            "title": title,
-            "parentId": parent_id,
-            "body": {"representation": "storage", "value": html},
-        })
+        try:
+            result = self._post("/pages", {
+                "spaceId": space_id,
+                "status": "current",
+                "title": title,
+                "parentId": parent_id,
+                "body": {"representation": "storage", "value": html},
+            })
+        except Exception as e:
+            # v2 실패(500 등) → v1 API로 폴백
+            space_key = ConfluenceClient._space_key_cache
+            if not space_key:
+                # 캐시 없으면 spaceId로 역조회
+                space_data = self._get(f"/spaces/{space_id}")
+                space_key = space_data.get("key", "")
+                ConfluenceClient._space_key_cache = space_key
+            print(f"  [create_page] v2 실패 ({e}), v1 API 폴백 (space={space_key})")
+            result = self._post_v1("/content", {
+                "type": "page",
+                "title": title,
+                "space": {"key": space_key},
+                "ancestors": [{"id": parent_id}],
+                "body": {"storage": {"value": html, "representation": "storage"}},
+            })
         # 간격 넓게: v1 content property API로 full-width 설정
         page_id = result.get("id", "")
         if page_id:
             for key in ("content-appearance-published", "content-appearance-draft"):
                 try:
-                    r = self._post_v1(f"/content/{page_id}/property", {
+                    self._post_v1(f"/content/{page_id}/property", {
                         "key": key,
                         "value": "full-width",
                     })
-                    print(f"  [spacing] {key} 설정 성공: {r}")
                 except Exception as e:
                     print(f"  [spacing] {key} 설정 실패: {e}")
         return result
 
     def get_child_pages(self, parent_id: str = CONFLUENCE_PARENT_PAGE_ID) -> list[dict]:
-        data = self._get(f"/pages/{parent_id}/children", params={"limit": 50})
+        # /pages/{id}/children 은 폴더 ID에서 404 반환 → parentId 쿼리로 폴백
+        try:
+            data = self._get(f"/pages/{parent_id}/children", params={"limit": 50})
+            return data.get("results", [])
+        except Exception:
+            pass
+        data = self._get("/pages", params={"parentId": parent_id, "limit": 50})
         return data.get("results", [])
 
     def find_page(self, doc_key: str) -> dict:
@@ -127,6 +159,17 @@ class ConfluenceClient:
                 f"Confluence 페이지에 <p>{marker}_START</p> 마커가 있는지 확인하세요."
             )
         return result
+
+    def delete_page(self, page_id: str) -> None:
+        """페이지 영구 삭제 (v1 REST API)."""
+        base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
+        r = requests.delete(f"{base_v1}/content/{page_id}",
+                            auth=self.auth, headers={"Accept": "application/json"})
+        if r.status_code == 204:
+            print(f"[Confluence] 페이지 삭제 완료 (id={page_id})")
+        else:
+            print(f"[Confluence] 삭제 실패 (id={page_id}): {r.status_code} {r.text[:200]}")
+            r.raise_for_status()
 
     @staticmethod
     def append_to_section(html: str, marker: str, new_content: str) -> str:

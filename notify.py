@@ -56,7 +56,7 @@ def _save_state(state: dict):
 
 # ── Jira 헬퍼 ─────────────────────────────────────────────────────
 def _extract_text(doc) -> str:
-    """ADF → 평문 변환."""
+    """ADF → 평문 변환 (text / mention / hardBreak 처리)."""
     if not doc:
         return ""
     if isinstance(doc, str):
@@ -64,8 +64,13 @@ def _extract_text(doc) -> str:
     texts = []
     def walk(node):
         if isinstance(node, dict):
-            if node.get("type") == "text":
+            t = node.get("type", "")
+            if t == "text":
                 texts.append(node.get("text", ""))
+            elif t == "mention":
+                texts.append(node.get("attrs", {}).get("text", ""))
+            elif t == "hardBreak":
+                texts.append("\n")
             for child in node.get("content", []):
                 walk(child)
     walk(doc)
@@ -86,6 +91,7 @@ def get_recently_updated(since_iso: str) -> list[dict]:
     jql = (
         f'project in ({", ".join(PROJECTS)}) '
         f'AND updated >= "{since_jira}" '
+        f'AND issuetype in ("신규/개선", "Urgent Request") '
         f'AND (customfield_10183 in ("Kia", "Common") OR customfield_10585 in ("KMC", "ALL")) '
         f'ORDER BY updated ASC'
     )
@@ -147,17 +153,26 @@ def detect_new_comments(issue_key: str, seen_ids: set, since_iso: str = "") -> l
         # 생성 시각 필터: since_iso 이전 댓글은 무시
         if since_iso and c.get("created", "") <= since_iso:
             continue
-        texts = []
+        import html as _html
+        parts = []
         def walk(node):
             if isinstance(node, dict):
-                if node.get("type") == "text": texts.append(node.get("text",""))
-                for ch in node.get("content",[]): walk(ch)
+                t = node.get("type", "")
+                if t == "text":
+                    parts.append(_html.escape(node.get("text", "")))
+                elif t == "mention":
+                    mt = _html.escape(node.get("attrs", {}).get("text", ""))
+                    parts.append(f'<span style="color:#0052cc;font-weight:bold;">{mt}</span>')
+                elif t == "hardBreak":
+                    parts.append("<br>")
+                for ch in node.get("content", []):
+                    walk(ch)
         walk(c.get("body", {}))
         new_comments.append({
             "id":      cid,
-            "created": c.get("created", "")[:10],
+            "created": c.get("created", ""),
             "author":  c.get("author", {}).get("displayName", ""),
-            "body":    " ".join(texts).strip()[:300],
+            "body":    "".join(parts).strip(),
         })
     return new_comments
 
@@ -176,6 +191,7 @@ def _fmt_kst(iso: str) -> str:
 
 
 def _build_html(events: list[dict], since_iso: str = "", now_iso: str = "") -> str:
+    _FF = "font-family:'Malgun Gothic',Arial,sans-serif;"
     # 알림 기간 안내 문구
     if since_iso and now_iso:
         period = (f"{_fmt_kst(since_iso)}부터 {_fmt_kst(now_iso)}까지 진행된 "
@@ -183,46 +199,75 @@ def _build_html(events: list[dict], since_iso: str = "", now_iso: str = "") -> s
     else:
         period = "Jira 상태 변경 및 댓글 추가에 대한 자동화된 알림입니다."
 
-    rows = ""
+    # 티켓별 그룹화 + 최신 이벤트 기준 정렬 (최신 티켓 → 상단)
+    from collections import defaultdict
+    grouped: dict[str, list] = defaultdict(list)
     for ev in events:
-        key    = ev["key"]
-        link   = f'{JIRA_BROWSE}/{key}'
-        title  = ev["summary"]
-        etype  = ev["type"]  # "status" or "comment"
+        grouped[ev["key"]].append(ev)
+    sorted_keys = sorted(grouped.keys(),
+                         key=lambda k: min(e["when"] for e in grouped[k]))
+    for k in sorted_keys:
+        grouped[k].sort(key=lambda e: e["when"])
 
-        if etype == "status":
-            detail = (
-                f'<b>상태 변경</b>: {ev["from"]} → <b>{ev["to"]}</b><br>'
-                f'변경자: {ev["author"]}  |  {ev["when"][:16].replace("T"," ")}'
-            )
-        else:
-            detail = (
-                f'<b>새 댓글</b> — {ev["author"]} ({ev["when"]})<br>'
-                f'<blockquote style="border-left:3px solid #ccc;padding:4px 8px;color:#555;">'
-                f'{ev["body"]}</blockquote>'
-            )
-
-        rows += f"""
+    rows_html = ""
+    ticket_border = "border-bottom:2px solid #d0d0d0;"
+    for key in sorted_keys:
+        evs = grouped[key]
+        rowspan = len(evs)
+        first = evs[0]
+        link = f'{JIRA_BROWSE}/{key}'
+        title = first["summary"]
+        ticket_cell = (
+            f'<a href="{link}" style="{_FF}font-weight:bold;color:#0052cc;">{key}</a>'
+            f'<div style="{_FF}color:#555;font-size:13px;margin-top:2px;">{title}</div>'
+        )
+        for i, ev in enumerate(evs):
+            is_last = (i == rowspan - 1)
+            ev_border = ticket_border if is_last else "border-bottom:1px solid #f0f0f0;"
+            if ev["type"] == "status":
+                badge = (f'<span style="{_FF}color:#0052cc;font-size:12px;'
+                         f'font-weight:bold;">🔄 상태변경</span><br>')
+                detail = (
+                    badge
+                    + f'<b style="{_FF}">{ev["from"]}</b> → <b style="{_FF}">{ev["to"]}</b><br>'
+                    + f'<span style="{_FF}color:#666;font-size:13px;">'
+                    + f'{ev["author"]}  |  {ev["when"][:16].replace("T", " ")}</span>'
+                )
+            else:
+                badge = (f'<span style="{_FF}color:#00875a;font-size:12px;'
+                         f'font-weight:bold;">💬 새 댓글</span><br>')
+                detail = (
+                    badge
+                    + f'<span style="{_FF}color:#666;font-size:13px;">'
+                    + f'{ev["author"]}  |  {ev["when"][:16].replace("T", " ")}</span><br>'
+                    + f'<blockquote style="{_FF}font-size:13px;border-left:3px solid #ccc;margin:6px 0 0;'
+                    + f'padding:4px 8px;color:#555;white-space:pre-wrap;">{ev["body"]}</blockquote>'
+                )
+            if i == 0:
+                tc_style = f'{_FF}padding:12px;vertical-align:top;width:200px;{ticket_border}'
+                rows_html += f"""
         <tr>
-          <td style="padding:12px;border-bottom:1px solid #eee;vertical-align:top;">
-            <a href="{link}" style="font-weight:bold;color:#0052cc;">{key}</a>
-            <div style="color:#555;font-size:13px;margin-top:2px;">{title}</div>
-          </td>
-          <td style="padding:12px;border-bottom:1px solid #eee;">{detail}</td>
+          <td style="{tc_style}" rowspan="{rowspan}">{ticket_cell}</td>
+          <td style="{_FF}padding:12px;{ev_border}">{detail}</td>
+        </tr>"""
+            else:
+                rows_html += f"""
+        <tr>
+          <td style="{_FF}padding:12px;{ev_border}">{detail}</td>
         </tr>"""
 
     return f"""
-    <html><body style="font-family:Arial,sans-serif;font-size:14px;">
-    <h2 style="color:#0052cc;">🔔 Jira 변경 알림 (KCCIVOC / KEUVOCOP)</h2>
-    <p style="color:#333;background:#f4f5f7;padding:10px;border-radius:4px;">{period}</p>
-    <table style="border-collapse:collapse;width:100%;max-width:800px;">
+    <html><body style="{_FF}font-size:14px;">
+    <h2 style="{_FF}color:#0052cc;">🔔 Jira 변경 알림 (KCCIVOC / KEUVOCOP)</h2>
+    <p style="{_FF}color:#333;background:#f4f5f7;padding:10px;border-radius:4px;">{period}</p>
+    <table style="border-collapse:collapse;width:100%;">
       <tr style="background:#f4f5f7;">
-        <th style="padding:10px;text-align:left;width:200px;">티켓</th>
-        <th style="padding:10px;text-align:left;">변경 내용</th>
+        <th style="{_FF}padding:10px;text-align:left;width:200px;">티켓</th>
+        <th style="{_FF}padding:10px;text-align:left;">내용</th>
       </tr>
-      {rows}
+      {rows_html}
     </table>
-    <p style="color:#999;font-size:12px;margin-top:16px;">
+    <p style="{_FF}color:#999;font-size:12px;margin-top:24px;">
       자동 알림 — CCI Analyst Bot ({datetime.now().strftime('%Y-%m-%d %H:%M')})
     </p>
     </body></html>"""
@@ -266,19 +311,25 @@ def send_email(events: list[dict]):
         if not to:
             print(f"[알림] {proj} 수신자 미설정 → 건너뜀")
             continue
-        subject = f"[Jira 알림/{proj}] {len(proj_events)}건 변경"
+        n_status  = sum(1 for e in proj_events if e["type"] == "status")
+        n_comment = sum(1 for e in proj_events if e["type"] == "comment")
+        parts = []
+        if n_status:  parts.append(f"상태변경 {n_status}건")
+        if n_comment: parts.append(f"새댓글 {n_comment}건")
+        subject = f"[Jira 알림/{proj}] {' / '.join(parts)}"
         _send_one(to, subject, proj_events, since_iso=_send_email_since, now_iso=_send_email_now)
 
 
 # ── 메인 ──────────────────────────────────────────────────────────
-def run():
+def run(force_now: datetime | None = None):
     """
     매일 16:00 KST 1회 실행.
     조회 범위: last_notification_time ~ 지금
       - 월요일 16시: 금요일 16시 이후 변경사항 포함 (주말 자동 커버)
-      - 화~금 16시: 전날 16시 이후 변경사항
+      - 화~금 16시: 전달 16시 이후 변경사항
+    force_now: 테스트용 현재 시각 오버라이드 (지정 시 state 업데이트도 이 시각으로)
     """
-    now_kst = datetime.now(KST)
+    now_kst = force_now if force_now is not None else datetime.now(KST)
     state   = _load_state()
     since   = state["last_notification_time"]  # 마지막 발송 시각 (ISO, KST)
     seen    = state.get("seen_comments", {})
@@ -293,24 +344,30 @@ def run():
         summary = issue["fields"].get("summary", "")
 
         # 1) 상태 변경 감지
-        for sc in detect_status_changes(key, since):
-            events.append({
-                "key": key, "summary": summary, "type": "status",
-                "from": sc["from"], "to": sc["to"],
-                "author": sc["author"], "when": sc["created"], "body": "",
-            })
+        try:
+            for sc in detect_status_changes(key, since):
+                events.append({
+                    "key": key, "summary": summary, "type": "status",
+                    "from": sc["from"], "to": sc["to"],
+                    "author": sc["author"], "when": sc["created"], "body": "",
+                })
+        except Exception as e:
+            print(f"[알림] {key} changelog 조회 실패: {e} → 건너뜀")
 
         # 2) 새 댓글 감지 (since 이후 생성된 것만)
-        seen_ids     = set(seen.get(key, []))
-        new_comments = detect_new_comments(key, seen_ids, since_iso=since)
-        for nc in new_comments:
-            events.append({
-                "key": key, "summary": summary, "type": "comment",
-                "from": "", "to": "", "author": nc["author"],
-                "when": nc["created"], "body": nc["body"],
-            })
-            seen_ids.add(nc["id"])
-        seen[key] = list(seen_ids)
+        try:
+            seen_ids     = set(seen.get(key, []))
+            new_comments = detect_new_comments(key, seen_ids, since_iso=since)
+            for nc in new_comments:
+                events.append({
+                    "key": key, "summary": summary, "type": "comment",
+                    "from": "", "to": "", "author": nc["author"],
+                    "when": nc["created"], "body": nc["body"],
+                })
+                seen_ids.add(nc["id"])
+            seen[key] = list(seen_ids)
+        except Exception as e:
+            print(f"[알림] {key} comments 조회 실패: {e} → 건너뜀")
 
     # 이메일 발송 (since/now를 모듈 변수로 전달)
     global _send_email_since, _send_email_now
@@ -329,4 +386,12 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force-now", type=str, default=None,
+                        help="현재 시각 오버라이드 (ISO 형식, 예: '2026-08-26T16:00:00+09:00')")
+    args = parser.parse_args()
+    _force_now = None
+    if args.force_now:
+        _force_now = datetime.fromisoformat(args.force_now)
+    run(force_now=_force_now)

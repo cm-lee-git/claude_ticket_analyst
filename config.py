@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Jira: HMG (현대자동차그룹) 인스턴스
 JIRA_BASE_URL = "https://hmg.atlassian.net"
@@ -44,6 +44,7 @@ JIRA_FIELDS = {
     "brand":        os.getenv("JIRA_FIELD_BRAND",        "customfield_10183"),  # 대상 브랜드: Kia, Common
     "brand2":       os.getenv("JIRA_FIELD_BRAND2",       "customfield_10585"),  # Brand: KMC, ALL
     "due_date":     os.getenv("JIRA_FIELD_DUE_DATE",     "customfield_10570"),  # Due Date (실제 값)
+    "end_date":     os.getenv("JIRA_FIELD_END_DATE",     "customfield_10185"),  # End date (Pending 관리 기준)
     "brd_status":   os.getenv("JIRA_FIELD_BRD_STATUS",   "customfield_10101"),
     "feature_type": os.getenv("JIRA_FIELD_FEATURE_TYPE", "customfield_10102"),
 }
