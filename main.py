@@ -17,7 +17,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from config import JIRA_EMAIL, JIRA_API_TOKEN, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN, ANTHROPIC_API_KEY
-from cycle import get_cycle_number
+from cycle import get_cycle_number, get_cycle_bounds
 from jira_client import JiraClient
 from confluence_client import ConfluenceClient
 from analyzer import analyze_tickets_batch
@@ -109,24 +109,48 @@ def cmd_list_fields():
         print(f"{f['id']:<30} {f.get('name', '')}")
 
 
-_WEEKLY_JQL = (
-    'created >= "2026-01-01" '
-    'AND status not in ("Dropped", "해결됨", "종료", "RESOLVE", "Deployed")'
-)
+_STATUS_FILTER = 'status not in ("Dropped", "해결됨", "종료", "RESOLVE", "Deployed")'
+
+_WEEKLY_JQL = f'created >= "2026-01-01" AND {_STATUS_FILTER}'
+
+# ── Test 모드 설정 ─────────────────────────────────────────────────────────
+_TEST_CYCLES = [6, 7]  # test 모드에서만 조회할 회차
 
 
-def cmd_doc1(as_of: str | None = None):
+def _build_test_jql() -> str:
+    """6·7회차 생성일 범위 + 상태 필터 JQL."""
+    min_date = get_cycle_bounds(_TEST_CYCLES[0])[0]   # 6회차 시작일
+    max_date = get_cycle_bounds(_TEST_CYCLES[-1])[1]  # 7회차 종료일
+    return f'created >= "{min_date}" AND created <= "{max_date}" AND {_STATUS_FILTER}'
+
+
+def _apply_test_cycle_filter(tickets: list[dict]) -> list[dict]:
+    """테스트 모드: _TEST_CYCLES 이외 회차 티켓 제거."""
+    before = len(tickets)
+    result = [t for t in tickets if t.get("cycle_number") in _TEST_CYCLES]
+    dropped = before - len(result)
+    if dropped:
+        print(f"  [test] {_TEST_CYCLES[0]}·{_TEST_CYCLES[-1]}회차 외 제외: {dropped}건")
+    print(f"  [test] 유효 티켓: {len(result)}건 ({_TEST_CYCLES[0]}~{_TEST_CYCLES[-1]}회차)")
+    return result
+
+
+def cmd_doc1(as_of: str | None = None, test_mode: bool = False):
     """월요일: 전체 티켓 재빌드 후 새 페이지 생성."""
     _check_env()
     jira = JiraClient()
+    jql = _build_test_jql() if test_mode else _WEEKLY_JQL
     tickets = _fetch_and_analyze(
-        extra_jql=_WEEKLY_JQL,
+        extra_jql=jql,
         save_path="tickets_analyzed_latest.json",
     )
+    if test_mode:
+        tickets = _apply_test_cycle_filter(tickets)
     doc1_updater.update(tickets, ConfluenceClient(), as_of=as_of, jira_client=jira)
 
 
-def cmd_doc1_daily(as_of: str | None = None, from_date: str | None = None):
+def cmd_doc1_daily(as_of: str | None = None, from_date: str | None = None,
+                   test_mode: bool = False):
     """화~금: 당일 생성된 신규 티켓만 기존 페이지에 추가."""
     _check_env()
     from datetime import timedelta, date as _date
@@ -138,27 +162,33 @@ def cmd_doc1_daily(as_of: str | None = None, from_date: str | None = None):
         f'AND created < "{tomorrow.isoformat()}"'
     )
     tickets = _fetch_and_analyze(extra_jql=extra_jql)
+    if test_mode:
+        tickets = _apply_test_cycle_filter(tickets)
     success = doc1_updater.append_new_tickets(tickets, ConfluenceClient(), as_of=as_of)
     if not success:
         print("[Doc1-Daily] 폴백: 기존 페이지 없음 → 전체 재빌드 실행")
-        cmd_doc1(as_of=as_of)
+        cmd_doc1(as_of=as_of, test_mode=test_mode)
 
 
-def cmd_doc2(as_of: str | None = None):
+def cmd_doc2(as_of: str | None = None, test_mode: bool = False):
     """월요일 10시: 전체 티켓 재빌드 후 새 페이지 생성."""
     _check_env()
+    jql = _build_test_jql() if test_mode else _WEEKLY_JQL
     tickets = _fetch_and_analyze(
-        extra_jql=_WEEKLY_JQL,
+        extra_jql=jql,
         save_path="tickets_analyzed_latest.json",
     )
+    if test_mode:
+        tickets = _apply_test_cycle_filter(tickets)
     doc2_updater.update(tickets, ConfluenceClient(), as_of=as_of)
 
 
 def cmd_doc2_daily(as_of: str | None = None, from_date: str | None = None,
-                   use_cache: bool = False):
+                   use_cache: bool = False, test_mode: bool = False):
     """월 16시, 화~금 16시: 당일 신규 티켓 있으면 전체 분석 + 기존 페이지 업데이트.
 
     use_cache: True이면 tickets_analyzed_latest.json 재사용 (Claude 분석 생략).
+    test_mode: True이면 6·7회차 티켓만 처리.
     """
     _check_env()
     import json, pathlib
@@ -170,14 +200,18 @@ def cmd_doc2_daily(as_of: str | None = None, from_date: str | None = None,
         f'created >= "{d.isoformat()}" '
         f'AND created < "{tomorrow.isoformat()}"'
     )
-    full_jql = 'created >= "2026-01-01"'
+    full_jql = _build_test_jql() if test_mode else 'created >= "2026-01-01"'
 
     # 당일 신규 티켓 확인 (빠른 체크)
     from jira_client import JiraClient
     jira_check = JiraClient()
-    new_today = jira_check.get_new_improvement_tickets(
-        extra_jql=f'{today_jql}'
-    )
+    new_today = jira_check.get_new_improvement_tickets(extra_jql=today_jql)
+    if test_mode:
+        new_today = _apply_test_cycle_filter(
+            [dict(t, cycle_number=get_cycle_number(
+                date.fromisoformat(t["created"]) if t.get("created") else date.today()
+            )) for t in new_today]
+        )
     if not new_today and not as_of:
         print("[Doc2-Daily] 당일 신규 티켓 없음 → 종료")
         return
@@ -193,13 +227,16 @@ def cmd_doc2_daily(as_of: str | None = None, from_date: str | None = None,
     if use_cache and cache_path.exists():
         print(f"[Doc2-Daily] 캐시 사용 → {cache_path} ({cache_path.stat().st_size // 1024}KB)")
         all_tickets = json.loads(cache_path.read_text(encoding="utf-8"))
+        if test_mode:
+            all_tickets = _apply_test_cycle_filter(all_tickets)
     else:
-        # 전체 분석 (신규 티켓 분석 비용 감수, 정확성 우선)
         print("[Doc2-Daily] 전체 분석 시작")
         all_tickets = _fetch_and_analyze(
             extra_jql=full_jql,
             save_path="tickets_analyzed_latest.json",
         )
+        if test_mode:
+            all_tickets = _apply_test_cycle_filter(all_tickets)
 
     doc2_updater.update_with_new_tickets(all_tickets, ConfluenceClient(),
                                          new_ticket_keys=new_today_keys,
@@ -212,13 +249,16 @@ def cmd_snapshot(force_cycle=None, as_of: str | None = None):
     snapshot_module.take_snapshot(force_cycle=force_cycle, as_of=as_of)
 
 
-def cmd_all():
+def cmd_all(test_mode: bool = False):
     _check_env()
     jira = JiraClient()
+    jql = _build_test_jql() if test_mode else _WEEKLY_JQL
     tickets = _fetch_and_analyze(
-        extra_jql=_WEEKLY_JQL,
+        extra_jql=jql,
         save_path="tickets_analyzed_latest.json",
     )
+    if test_mode:
+        tickets = _apply_test_cycle_filter(tickets)
     client = ConfluenceClient()
     doc1_updater.update(tickets, client, jira_client=jira)
     doc2_updater.update(tickets, client)
@@ -238,6 +278,8 @@ if __name__ == "__main__":
                         help="daily 명령의 JQL 날짜 오버라이드 (예: '2026-08-25'). 미지정 시 오늘")
     parser.add_argument("--use-cache", action="store_true",
                         help="--doc2-daily: tickets_analyzed_latest.json 재사용, Claude 분석 생략")
+    parser.add_argument("--test", action="store_true",
+                        help=f"테스트 모드: {_TEST_CYCLES[0]}·{_TEST_CYCLES[-1]}회차 티켓만 조회·분석")
     group.add_argument("--doc2",         action="store_true", help="Doc2 월요일 전체 재생성")
     group.add_argument("--doc2-daily",   action="store_true", help="Doc2 월16시·화~금16시 신규 티켓 업데이트")
     group.add_argument("--all",          action="store_true", help="전체 문서 업데이트 (Doc1+Doc2)")
@@ -251,15 +293,15 @@ if __name__ == "__main__":
     elif args.list_fields:
         cmd_list_fields()
     elif args.doc1:
-        cmd_doc1(as_of=args.timestamp)
+        cmd_doc1(as_of=args.timestamp, test_mode=args.test)
     elif args.doc1_daily:
-        cmd_doc1_daily(as_of=args.timestamp, from_date=args.from_date)
+        cmd_doc1_daily(as_of=args.timestamp, from_date=args.from_date, test_mode=args.test)
     elif args.snapshot:
         cmd_snapshot(force_cycle=args.force_cycle, as_of=args.timestamp)
     elif args.doc2:
-        cmd_doc2(as_of=args.timestamp)
+        cmd_doc2(as_of=args.timestamp, test_mode=args.test)
     elif args.doc2_daily:
         cmd_doc2_daily(as_of=args.timestamp, from_date=args.from_date,
-                       use_cache=args.use_cache)
+                       use_cache=args.use_cache, test_mode=args.test)
     elif args.all:
-        cmd_all()
+        cmd_all(test_mode=args.test)
