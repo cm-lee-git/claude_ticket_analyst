@@ -28,6 +28,19 @@ def get_current_cycle() -> int:
     return get_cycle_number(date.today())
 
 
+def get_active_cycle() -> int:
+    """마감일의 24시가 지나지 않은 첫 번째 회차를 반환 (현재 진행 중 회차).
+    회차 마감일 당일 자정이 지나면 다음 회차가 활성화됨.
+    """
+    today = date.today()
+    n = 1
+    while True:
+        _, end = get_cycle_bounds(n)
+        if end >= today:
+            return n
+        n += 1
+
+
 def cycle_label(n: int) -> str:
     """회차 번호를 표시용 문자열로 변환. 0 → Pre-BRD."""
     return "Pre-BRD" if n == 0 else f"{n}회차"

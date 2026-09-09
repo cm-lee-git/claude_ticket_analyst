@@ -42,5 +42,27 @@
       "rejected": 0,
       "pending": 0
     }
+  },
+  "7": {
+    "cycle_number": 7,
+    "snapshot_date": "2026-09-08",
+    "KR": {
+      "total": 0,
+      "approved": 0,
+      "rejected": 0,
+      "pending": 0
+    },
+    "EU": {
+      "total": 1,
+      "approved": 0,
+      "rejected": 1,
+      "pending": 0
+    },
+    "HQ": {
+      "total": 0,
+      "approved": 0,
+      "rejected": 0,
+      "pending": 0
+    }
   }
 }

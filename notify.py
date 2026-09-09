@@ -85,25 +85,35 @@ def _jira_get(path: str, params: dict = None) -> dict:
 
 
 def get_recently_updated(since_iso: str) -> list[dict]:
-    """since_iso 이후 업데이트된 KCCIVOC/KEUVOCOP 티켓 조회."""
+    """since_iso 이후 업데이트된 KCCIVOC/KEUVOCOP 티켓 조회 (전체 페이지네이션)."""
     # Jira Cloud는 ISO 형식 대신 'yyyy-MM-dd HH:mm' 형식 사용
     since_jira = since_iso[:16].replace("T", " ")
     jql = (
         f'project in ({", ".join(PROJECTS)}) '
         f'AND updated >= "{since_jira}" '
-        f'AND issuetype in ("신규/개선", "Urgent Request") '
+        f'AND issuetype in (10067, "Urgent Request") '
         f'AND (customfield_10183 in ("Kia", "Common") OR customfield_10585 in ("KMC", "ALL")) '
         f'ORDER BY updated ASC'
     )
-    r = requests.post(
-        f"{JIRA_BASE}/search/jql",
-        auth=JIRA_AUTH,
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
-        json={"jql": jql, "maxResults": 50,
-              "fields": ["summary", "status", "assignee", "updated"]},
-    )
-    r.raise_for_status()
-    return r.json().get("issues", [])
+    results = []
+    payload = {"jql": jql, "maxResults": 50,
+               "fields": ["summary", "status", "assignee", "updated"]}
+    while True:
+        r = requests.post(
+            f"{JIRA_BASE}/search/jql",
+            auth=JIRA_AUTH,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            json=payload,
+        )
+        r.raise_for_status()
+        data = r.json()
+        issues = data.get("issues", [])
+        results.extend(issues)
+        next_token = data.get("nextPageToken")
+        if not next_token or not issues:
+            break
+        payload["nextPageToken"] = next_token
+    return results
 
 
 def get_changelog(issue_key: str) -> list[dict]:
@@ -256,6 +266,12 @@ def _build_html(events: list[dict], since_iso: str = "", now_iso: str = "") -> s
           <td style="{_FF}padding:12px;{ev_border}">{detail}</td>
         </tr>"""
 
+    if not rows_html:
+        rows_html = (
+            '<tr><td colspan="2" style="' + _FF + 'padding:20px;text-align:center;color:#999;">'
+            '변경사항이 없습니다.</td></tr>'
+        )
+
     return f"""
     <html><body style="{_FF}font-size:14px;">
     <h2 style="{_FF}color:#0052cc;">🔔 Jira 변경 알림 (KCCIVOC / KEUVOCOP)</h2>
@@ -299,7 +315,13 @@ def _send_one(to: list[str], subject: str, events: list[dict],
 
 
 def send_email(events: list[dict]):
-    """프로젝트별로 수신자를 분리하여 이메일 발송."""
+    """프로젝트별로 수신자를 분리하여 이메일 발송. 변경 없을 때도 0건으로 발송."""
+    if not events:
+        all_to = [addr for addrs in PROJECT_RECIPIENTS.values() for addr in addrs]
+        subject = "[Jira 알림] 상태변경 0건 / 새댓글 0건"
+        _send_one(all_to, subject, events, since_iso=_send_email_since, now_iso=_send_email_now)
+        return
+
     # 프로젝트별로 이벤트 그룹화
     by_project: dict[str, list[dict]] = {}
     for ev in events:
@@ -373,11 +395,11 @@ def run(force_now: datetime | None = None):
     global _send_email_since, _send_email_now
     _send_email_since = since
     _send_email_now   = now_kst.isoformat()
+    send_email(events)
     if events:
-        send_email(events)
         print(f"[알림] 총 {len(events)}건 발송 완료")
     else:
-        print(f"[알림] 변경 없음 (조회 {len(issues)}건)")
+        print(f"[알림] 변경 없음 — 0건 이메일 발송 완료 (조회 {len(issues)}건)")
 
     # 마지막 발송 시각을 현재 시각(KST)으로 업데이트
     state["last_notification_time"] = now_kst.isoformat()

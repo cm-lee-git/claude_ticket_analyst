@@ -138,7 +138,10 @@ def cmd_doc1_daily(as_of: str | None = None, from_date: str | None = None):
         f'AND created < "{tomorrow.isoformat()}"'
     )
     tickets = _fetch_and_analyze(extra_jql=extra_jql)
-    doc1_updater.append_new_tickets(tickets, ConfluenceClient(), as_of=as_of)
+    success = doc1_updater.append_new_tickets(tickets, ConfluenceClient(), as_of=as_of)
+    if not success:
+        print("[Doc1-Daily] 폴백: 기존 페이지 없음 → 전체 재빌드 실행")
+        cmd_doc1(as_of=as_of)
 
 
 def cmd_doc2(as_of: str | None = None):

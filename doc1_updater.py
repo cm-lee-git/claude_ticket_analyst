@@ -11,7 +11,7 @@ from datetime import datetime, date
 from bs4 import BeautifulSoup, Tag
 from confluence_client import ConfluenceClient, HmgConfluenceClient
 from config import DOC_PAGE_IDS, HMG_DOC1_FOLDER_3Q, HMG_DOC1_FOLDER_Q4
-from cycle import cycle_label
+from cycle import cycle_label, get_active_cycle
 
 # ─── 상수 ────────────────────────────────────────────────────────────────────
 
@@ -792,17 +792,22 @@ def _count_tickets_in_tbody(tbody: Tag) -> int:
 
 def append_new_tickets(tickets_with_analysis: list[dict],
                        client: ConfluenceClient | None = None,
-                       as_of: str | None = None):
-    """화~금: 당일 신규 티켓만 기존 최신 doc1 페이지에 추가."""
+                       as_of: str | None = None) -> bool:
+    """화~금: 당일 신규 티켓만 기존 최신 doc1 페이지에 추가.
+    Returns True if handled (success or no-op), False if fallback to full rebuild needed.
+    """
     if client is None:
         client = ConfluenceClient()
 
-    # 오버라이드 적용 → KR 권역만
+    active_cycle = get_active_cycle()
+
+    # 오버라이드 적용 → KR 권역, 현재 회차만
     all_tickets = _apply_overrides(tickets_with_analysis)
-    kr_tickets = [t for t in all_tickets if t.get("region") == "KR"]
+    kr_tickets = [t for t in all_tickets
+                  if t.get("region") == "KR" and t.get("cycle_number", 0) == active_cycle]
     if not kr_tickets and not as_of:
         print("[Doc1-Daily] 신규 KR 티켓 없음 → 종료")
-        return
+        return True
 
     # 폴더에 수백 개 자식이 있으므로 전체 페이지네이션 후 패턴 필터링
     import re as _re
@@ -826,8 +831,8 @@ def append_new_tickets(tickets_with_analysis: list[dict],
             break
     matched = [p for p in all_children if _AI_TITLE_RE.match(p["title"])]
     if not matched:
-        print("[Doc1-Daily] 기존 페이지 없음 → 종료")
-        return
+        print("[Doc1-Daily] 기존 페이지 없음 → 전체 재빌드로 폴백")
+        return False
     latest = sorted(matched, key=lambda p: p["title"], reverse=True)[0]
     page_id = latest["id"]
     print(f"[Doc1-Daily] 대상 페이지: {latest['title']} (id={page_id})")
@@ -836,31 +841,22 @@ def append_new_tickets(tickets_with_analysis: list[dict],
     soup = BeautifulSoup(html, 'html.parser')
 
     tables = soup.find_all('table')
-    if len(tables) < 2:
-        print("[Doc1-Daily] 표 구조 이상 (2개 미만) → 종료")
-        return
+    if not tables:
+        print("[Doc1-Daily] 표 구조 이상 (테이블 없음) → 종료")
+        return True
 
-    pre_tbody  = tables[0].find('tbody')
-    post_tbody = tables[1].find('tbody')
+    current_tbody = tables[0].find('tbody')
+    existing_count = _count_tickets_in_tbody(current_tbody)
 
-    pre_existing  = _count_tickets_in_tbody(pre_tbody)
-    post_existing = _count_tickets_in_tbody(post_tbody)
-
-    new_pre, new_post = _split_tickets(kr_tickets)
-
-    for i, ticket in enumerate(new_pre):
-        for row in _build_pre_brd_block(soup, ticket, pre_existing + i + 1):
-            pre_tbody.append(row)
-
-    for i, ticket in enumerate(new_post):
-        for row in _build_post_brd_block(soup, ticket, post_existing + i + 1):
-            post_tbody.append(row)
+    for i, ticket in enumerate(kr_tickets):
+        for row in _build_post_brd_block(soup, ticket, existing_count + i + 1):
+            current_tbody.append(row)
 
     # 업데이트 노트 (맨 위) + 제목 변경
     now = datetime.now()
     timestamp = as_of if as_of else now.strftime("%m-%d %H:%M")
     note_dt = f"2026-{as_of}" if as_of else now.strftime("%Y-%m-%d %H:%M")
-    new_keys = [t.get('key', '') for t in new_pre + new_post]
+    new_keys = [t.get('key', '') for t in kr_tickets]
     keys_str = ', '.join(new_keys) if new_keys else '-'
     note_p = soup.new_tag('p')
     em_tag = soup.new_tag('em')
@@ -872,8 +868,9 @@ def append_new_tickets(tickets_with_analysis: list[dict],
     new_title = f"{timestamp} KKR OneApp 주간 보고 (AI 생성)"
     client.update_page(page_id, new_title, str(soup), version,
                        message=f"Daily: {len(new_pre)}건 Pre-BRD, {len(new_post)}건 Post-BRD 추가")
-    print(f"[Doc1-Daily] 완료  Pre-BRD+{len(new_pre)}건 / Post-BRD+{len(new_post)}건")
+    print(f"[Doc1-Daily] 완료  {len(kr_tickets)}건 추가 ({active_cycle}회차)")
     print(f"[Doc1-Daily] 페이지 업데이트: {new_title} (id={page_id})")
+    return True
 
 
 # ─── Weekly 전체 재빌드 ──────────────────────────────────────────────────────
@@ -883,11 +880,15 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     if client is None:
         client = ConfluenceClient()
 
-    # 오버라이드 적용 → KR 권역만
+    active_cycle = get_active_cycle()
+
+    # 오버라이드 적용 → KR 권역, 현재 회차만
     all_tickets = _apply_overrides(tickets_with_analysis)
     kr_tickets = [t for t in all_tickets if t.get("region") == "KR"]
-
-    pre_brd, post_brd = _split_tickets(kr_tickets)
+    current_tickets = sorted(
+        [t for t in kr_tickets if t.get("cycle_number", 0) == active_cycle],
+        key=lambda t: t.get("created", "")
+    )
 
     # Feature 1: HMG Confluence에서 이전 티켓 행 추출
     hmg_client = HmgConfluenceClient()
@@ -900,7 +901,7 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     note_p = soup.new_tag('p')
     em_tag = soup.new_tag('em')
     em_tag.string = (f"{now.strftime('%Y-%m-%d %H:%M')} 전체 재생성 "
-                     f"(Pre-BRD {len(pre_brd)}건 / Post-BRD {len(post_brd)}건)")
+                     f"({active_cycle}회차 {len(current_tickets)}건)")
     note_p.append(em_tag)
     soup.append(note_p)
 
@@ -916,19 +917,12 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     h1.string = TABLE_TITLE
     soup.append(h1)
 
-    # h2: Pre-BRD
-    h2_pre = soup.new_tag('h2')
-    h2_pre.string = SECTION_PRE
-    soup.append(h2_pre)
+    # h2: 현재 회차
+    h2_current = soup.new_tag('h2')
+    h2_current.string = cycle_label(active_cycle)
+    soup.append(h2_current)
 
-    soup.append(_build_pre_brd_table(soup, pre_brd, ref_rows=ref_rows))
-
-    # h2: Post-BRD
-    h2_post = soup.new_tag('h2')
-    h2_post.string = SECTION_POST
-    soup.append(h2_post)
-
-    soup.append(_build_post_brd_table(soup, post_brd, offset=len(pre_brd), ref_rows=ref_rows))
+    soup.append(_build_post_brd_table(soup, current_tickets, offset=0, ref_rows=ref_rows))
 
     # h1: Pending 관리 — 2026-01-01 이후 티켓만 (end_date 기준 필터 적용)
     if jira_client is not None:
@@ -970,5 +964,5 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
 
     result = client.create_page(parent_id, title, str(soup))
     new_id = result.get("id", "")
-    print(f"[Doc1] 완료  Pre-BRD: {len(pre_brd)}건 / Post-BRD: {len(post_brd)}건")
+    print(f"[Doc1] 완료  {active_cycle}회차: {len(current_tickets)}건")
     print(f"[Doc1] 새 페이지: {title}  (id={new_id})")

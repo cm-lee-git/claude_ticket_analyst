@@ -7,17 +7,37 @@ Document 2: 신규/개선 전체 현황 — 새 페이지 생성 방식
   Section 3: EU 티켓 히스토리
   Section 4: HQ GBCXD 및 타부문 티켓 히스토리
 """
+import re as _re_module
 from collections import defaultdict
 from datetime import datetime
 
 from confluence_client import ConfluenceClient, HmgConfluenceClient
 from config import DOC_PAGE_IDS, HMG_DOC2_PAGE_ID
-from cycle import cycle_label, get_cycle_bounds
+from cycle import cycle_label, get_cycle_bounds, get_active_cycle
 
 JIRA_BROWSE = "https://hmg.atlassian.net/browse"
 
 # Feature 1: 참조 문서 복제 — HMG Confluence에서 기존 티켓 행 읽기
 DOC2_REF_PAGE_ID = HMG_DOC2_PAGE_ID  # HMG hmg.atlassian.net 참조 페이지
+
+# ── closed/resolved 필터 ─────────────────────────────────────────
+_CLOSED_RE = _re_module.compile(r'\b(resolved?|clos(?:e|ed))\b', _re_module.IGNORECASE)
+
+
+def _is_closed_summary(text: str) -> bool:
+    """Ticket Summary에 resolved/resolve/closed/close 포함 여부 (대소문자 무관)."""
+    return bool(_CLOSED_RE.search(text or ''))
+
+
+def _count_effective_cols_first_row(rows_html: str) -> int:
+    """ref rows HTML 첫 번째 <tr>에서 colspan 반영 실질 컬럼 수 반환 (표 구조 검증용)."""
+    from bs4 import BeautifulSoup as _bsBS
+    soup = _bsBS(rows_html, 'html.parser')
+    first_tr = soup.find('tr')
+    if not first_tr:
+        return 0
+    cells = first_tr.find_all(['td', 'th'])
+    return sum(int(c.get('colspan', 1)) for c in cells)
 
 
 def _key_link(key: str) -> str:
@@ -249,6 +269,307 @@ def _load_ref_rows_doc2(hmg_client: HmgConfluenceClient) -> dict[str, str]:
         return {}
 
 
+# ── history expand 블록 지원 ──────────────────────────────────────
+
+def _load_ref_history_doc2(hmg_client: HmgConfluenceClient, current_cycle: int) -> dict:
+    """HMG doc2 참조 페이지에서 current_cycle 미만의 expand 블록을 지역/승인별로 추출.
+
+    Returns: {
+        'KR': {'Approved': [(cycle_title, body_html), ...], '보류': [...], '반려': [...]},
+        'EU': {...},
+        'HQ': {...}
+    }
+    """
+    import re as _re
+
+    result = {r: {'Approved': [], '보류': [], '반려': []}
+              for r in ('KR', 'EU', 'HQ')}
+
+    try:
+        html, _, _ = hmg_client.get_page_storage(DOC2_REF_PAGE_ID)
+    except Exception as e:
+        print(f"  [ref_history] HMG 참조 문서 조회 실패: {e}")
+        return result
+
+    # Confluence storage format 패턴
+    EXPAND_PAT = _re.compile(
+        r'<ac:structured-macro[^>]*ac:name=["\']expand["\'][^>]*>(.*?)</ac:structured-macro>',
+        _re.DOTALL | _re.IGNORECASE,
+    )
+    TITLE_PAT = _re.compile(
+        r'<ac:parameter[^>]*ac:name=["\']title["\'][^>]*>(.*?)</ac:parameter>',
+        _re.DOTALL,
+    )
+    BODY_PAT = _re.compile(r'<ac:rich-text-body>(.*?)</ac:rich-text-body>', _re.DOTALL)
+    CYCLE_NUM_PAT = _re.compile(r'Cycle\s+(\d+)', _re.I)
+
+    REGION_MAP = [
+        ('KR 티켓 히스토리', 'KR'),
+        ('EU 티켓 히스토리', 'EU'),
+        ('HQ GBCXD 및 타부문 티켓 히스토리', 'HQ'),
+    ]
+    APPROVAL_MAP = [
+        ('승인 티켓', 'Approved'),
+        ('보류 티켓', '보류'),
+        ('반려 티켓', '반려'),
+    ]
+
+    for expand_m in EXPAND_PAT.finditer(html):
+        macro_inner = expand_m.group(1)
+        macro_start = expand_m.start()
+        preceding = html[:macro_start]
+
+        # 직전 h2 → region
+        h2_matches = list(_re.finditer(r'<h2[^>]*>(.*?)</h2>', preceding, _re.DOTALL))
+        if not h2_matches:
+            continue
+        h2_text = _re.sub(r'<[^>]+>', '', h2_matches[-1].group(1))
+        region = next((r for kw, r in REGION_MAP if kw in h2_text), None)
+        if not region:
+            continue
+
+        # h2 이후 직전 strong → approval
+        h2_end_pos = h2_matches[-1].end()
+        after_h2 = preceding[h2_end_pos:]
+        strong_texts = list(_re.finditer(r'<strong[^>]*>(.*?)</strong>', after_h2, _re.DOTALL))
+        approval = None
+        for sm in reversed(strong_texts):
+            txt = _re.sub(r'<[^>]+>', '', sm.group(1)).strip()
+            for kw, appr in APPROVAL_MAP:
+                if kw in txt:
+                    approval = appr
+                    break
+            if approval:
+                break
+        if not approval:
+            continue
+
+        # Title 추출
+        title_m = TITLE_PAT.search(macro_inner)
+        if not title_m:
+            continue
+        title = _re.sub(r'<[^>]+>', '', title_m.group(1)).strip()
+
+        # 현재 회차 이상 제외 (직접 계산으로 대체)
+        cycle_m = CYCLE_NUM_PAT.search(title)
+        if cycle_m and int(cycle_m.group(1)) >= current_cycle:
+            continue
+
+        # Body 추출
+        body_m = BODY_PAT.search(macro_inner)
+        if not body_m:
+            continue
+        body_html = body_m.group(1).strip()
+
+        result[region][approval].append((title, body_html))
+
+    total = sum(len(v) for r in result.values() for v in r.values())
+    print(f"  [ref_history] {total}개 expand 블록 추출 ({current_cycle}회차 미만)")
+    return result
+
+
+def _update_summary_cell(cell_tag, new_summary_ko: str) -> bool:
+    """내용 <td> 내 <Summary> 이후 첫 <ul>을 new_summary_ko로 교체. 성공 시 True."""
+    from bs4 import BeautifulSoup as _BS
+    for p_tag in cell_tag.find_all('p'):
+        strong = p_tag.find('strong')
+        if not strong or 'Summary' not in (strong.get_text() or ''):
+            continue
+        ul = p_tag.find_next_sibling('ul')
+        if ul and ul.find_parent() == p_tag.find_parent():
+            lines = [l.strip() for l in new_summary_ko.split('\n') if l.strip()] or [new_summary_ko.strip()]
+            new_ul = _BS('<ul>' + ''.join(f'<li>{l}</li>' for l in lines) + '</ul>',
+                         'html.parser').find('ul')
+            ul.replace_with(new_ul)
+            return True
+    return False
+
+
+def _rebuild_ticket_rows(t: dict, has_cycle_col: bool, table_type: str) -> str:
+    """단일 티켓 HTML 행을 현재 코드 기준으로 재생성. 실패 시 ''."""
+    if not t:
+        return ''
+    key = t.get('key', '')
+    scores = t.get('scores', {})
+
+    def td_rs(text, rs=6):
+        return f'<td rowspan="{rs}"><p>{text}</p></td>'
+
+    cc = (f'<td rowspan="6"><p>{cycle_label(t.get("cycle_number", 0))}</p></td>'
+          if has_cycle_col else '')
+
+    score_rows = ''.join(
+        f'<tr><td><p>{SCORE_LABELS[i]}</p></td>'
+        f'<td><p>{_score_mark(scores.get(SCORE_KEYS[i], 0))}</p></td></tr>'
+        for i in range(1, 6)
+    )
+
+    if table_type == 'approved':
+        is_prebrd = (t.get('cycle_number', 0) == 0)
+        feature_label = t.get('feature_label') or '기존 기능 개선'
+        parts = []
+        for label, field in [('Summary', 'summary_ko'), ('배경', 'background'),
+                              ('문제', 'problem'), (feature_label, 'feature')]:
+            val = t.get(field) or (t.get('summary', '') if field == 'summary_ko' else '')
+            if val:
+                lines = [l.strip() for l in val.split('\n') if l.strip()] or [val.strip()]
+                parts.append(f'<p><strong>&lt;{label}&gt;</strong></p><ul>'
+                             + ''.join(f'<li>{l}</li>' for l in lines) + '</ul>')
+        content_html = ''.join(parts)
+        priority = str(sum(1 for k in SCORE_KEYS[1:] if float(scores.get(k, 0)) > 0))
+        brd_val = '' if is_prebrd else APPROVAL_LABEL.get(_effective_approval(t), '')
+        row1 = (
+            f'<tr>{td_rs("1")}{cc}'
+            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
+            f'{td_rs(t.get("summary", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
+            f'{td_rs(t.get("created", ""))}{td_rs(t.get("due_date", ""))}'
+            f'<td rowspan="6">{content_html}</td>'
+            f'<td><p>{SCORE_LABELS[0]}</p></td>'
+            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
+            f'{td_rs(priority)}{td_rs(brd_val)}</tr>'
+        )
+        return row1 + score_rows
+
+    elif table_type == 'pending':
+        hold_code = t.get('hold_code') or ''
+        reason = t.get('hold_reason') or (t.get('background', '')[:150] if hold_code else '')
+        row1 = (
+            f'<tr>{td_rs("1")}{cc}'
+            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
+            f'{td_rs(t.get("summary", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
+            f'{td_rs(t.get("created", ""))}{td_rs(t.get("due_date", ""))}'
+            f'{td_rs(hold_code)}{td_rs(reason)}'
+            f'<td><p>{SCORE_LABELS[0]}</p></td>'
+            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
+            f'{td_rs("")}{td_rs("")}{td_rs("")}</tr>'
+        )
+        return row1 + score_rows
+
+    elif table_type == 'rejected':
+        rej_code = t.get('rejection_code') or ''
+        reason = t.get('rejection_reason') or (t.get('problem', '')[:150] if rej_code else '')
+        row1 = (
+            f'<tr>{td_rs("1")}{cc}'
+            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
+            f'{td_rs(t.get("summary", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
+            f'{td_rs(t.get("created", ""))}{td_rs(t.get("due_date", ""))}'
+            f'{td_rs(rej_code)}{td_rs(reason)}'
+            f'<td><p>{SCORE_LABELS[0]}</p></td>'
+            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
+            f'{td_rs("")}</tr>'
+        )
+        return row1 + score_rows
+
+    return ''
+
+
+def _apply_history_filter_and_update(body_html: str, tickets_by_key: dict,
+                                     has_cycle_col: bool, table_type: str) -> str:
+    """history expand 블록 내 티켓 행 처리.
+
+    - closed/resolved 티켓: 그대로 유지
+    - 비-closed 티켓 중 tickets_by_key에 있고 컬럼 구조 불일치: 현재 데이터로 행 재생성
+    - 비-closed 티켓 중 tickets_by_key에 있고 구조 일치: summary_ko 업데이트 (승인 테이블만)
+    - 그 외: 그대로 유지
+    """
+    from bs4 import BeautifulSoup as _BS
+
+    EXPECTED_COLS = {
+        'approved': 12 if has_cycle_col else 11,
+        'pending':  14 if has_cycle_col else 13,
+        'rejected': 12 if has_cycle_col else 11,
+    }
+    expected_cols = EXPECTED_COLS.get(table_type, 0)
+    key_col_idx     = 2 if has_cycle_col else 1
+    summary_col_idx = 3 if has_cycle_col else 2
+    content_col_idx = 7 if has_cycle_col else 6  # 승인 테이블 내용 컬럼
+
+    soup = _BS(body_html, 'html.parser')
+    table = soup.find('table')
+    if not table:
+        return body_html
+
+    trs = list(table.find_all('tr'))
+    modified = False
+    new_trs: list = []
+    i = 0
+
+    while i < len(trs):
+        tr = trs[i]
+        cells = tr.find_all(['td', 'th'])
+
+        try:
+            rs = int(cells[0].get('rowspan', '1')) if cells else 1
+        except (ValueError, TypeError):
+            rs = 1
+
+        # 헤더 행 또는 스코어 행 → 그대로
+        if rs <= 1 or not cells:
+            new_trs.append(tr)
+            i += 1
+            continue
+
+        # Key / Jira Summary 추출
+        key_text = ''
+        if len(cells) > key_col_idx:
+            a = cells[key_col_idx].find('a')
+            key_text = a.get_text(strip=True) if a else cells[key_col_idx].get_text(strip=True)
+
+        jira_sum = cells[summary_col_idx].get_text(strip=True) if len(cells) > summary_col_idx else ''
+
+        # ① closed/resolved → 그대로
+        if _is_closed_summary(jira_sum):
+            new_trs.extend(trs[i:i + rs])
+            i += rs
+            continue
+
+        actual_cols = sum(int(c.get('colspan', 1)) for c in cells)
+        struct_ok = (expected_cols == 0 or actual_cols == expected_cols)
+        t = tickets_by_key.get(key_text)
+
+        # ② 구조 불일치 + 데이터 있음 → 재생성
+        if not struct_ok and t:
+            rebuilt = _rebuild_ticket_rows(t, has_cycle_col, table_type)
+            if rebuilt:
+                print(f"  [history 재생성] {key_text}: {actual_cols}열→{expected_cols}열 수정")
+                rebuilt_soup = _BS(rebuilt, 'html.parser')
+                new_trs.extend(rebuilt_soup.find_all('tr'))
+                modified = True
+                i += rs
+                continue
+            print(f"  [history 재생성 실패] {key_text}: 그대로 유지")
+
+        # ③ 구조 불일치 + 데이터 없음 → 경고만
+        if not struct_ok:
+            print(f"  [history 구조 불일치] {key_text}: {actual_cols}열≠{expected_cols}열, 데이터 없어 그대로")
+
+        # ④ 승인 테이블 + 데이터 있음 → summary_ko 업데이트
+        if table_type == 'approved' and t:
+            new_sum = t.get('summary_ko', '')
+            if new_sum and len(cells) > content_col_idx:
+                if _update_summary_cell(cells[content_col_idx], new_sum):
+                    modified = True
+
+        new_trs.extend(trs[i:i + rs])
+        i += rs
+
+    if not modified:
+        return body_html
+
+    # table 재구성
+    for tr in list(table.find_all('tr')):
+        tr.extract()
+    tbody = table.find('tbody')
+    target = tbody if tbody else table
+    for tr in new_trs:
+        target.append(tr)
+
+    return str(soup)
+
+
 def _cnt(tickets, region=None, approval=None, transition=None):
     """티켓 수 카운트.
     transition: None=전체 / "direct"=보류 미경유 / "converted"=보류 경유
@@ -318,8 +639,12 @@ def _build_approved_table(tickets, widths, has_cycle_col, is_prebrd=False, ref_r
         key = t.get("key", "")
         created = t.get("created", "")
         if ref_rows and key in ref_rows:
-            rows.append(ref_rows[key])
-            continue
+            _exp = 12 if has_cycle_col else 11
+            _act = _count_effective_cols_first_row(ref_rows[key])
+            if _act == _exp:
+                rows.append(ref_rows[key])
+                continue
+            print(f"  [ref 구조 불일치-승인] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
         scores = t.get("scores", {})
         priority = str(sum(1 for k in SCORE_KEYS[1:] if float(scores.get(k, 0)) > 0))
         brd_val = "" if is_prebrd else APPROVAL_LABEL.get(_effective_approval(t), "")
@@ -388,8 +713,12 @@ def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=
         key = t.get("key", "")
         created = t.get("created", "")
         if ref_rows and key in ref_rows:
-            rows.append(ref_rows[key])
-            continue
+            _exp = 14 if has_cycle_col else 13
+            _act = _count_effective_cols_first_row(ref_rows[key])
+            if _act == _exp:
+                rows.append(ref_rows[key])
+                continue
+            print(f"  [ref 구조 불일치-보류] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
         hold_code = t.get("hold_code") or ""
         reason = t.get("hold_reason") or (t.get("background", "")[:150] if hold_code else "")
         scores = t.get("scores", {})
@@ -457,8 +786,12 @@ def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows
         key = t.get("key", "")
         created = t.get("created", "")
         if ref_rows and key in ref_rows:
-            rows.append(ref_rows[key])
-            continue
+            _exp = 12 if has_cycle_col else 11
+            _act = _count_effective_cols_first_row(ref_rows[key])
+            if _act == _exp:
+                rows.append(ref_rows[key])
+                continue
+            print(f"  [ref 구조 불일치-반려] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
         rej_code = t.get("rejection_code") or ""
         reason = t.get("rejection_reason") or (t.get("problem", "")[:150] if rej_code else "")
         scores = t.get("scores", {})
@@ -611,73 +944,6 @@ def _build_section1(tickets, current_cycle, hmg_client=None):
         # 폴백: 전체 티켓에서 18개 직접 계산
         agg = _mk6(_KR_REGIONS, tickets) + _mk6(_EU_REGIONS, tickets) + _mk6(_HQ_REGIONS, tickets)
 
-    def _ov(off):
-        """offset별 종합 현황 4항목: (인입, 승인, 반려, 보류).
-        승인 = 직접+전환, 반려 = 직접+전환, 보류 = 보류중+승인전환+반려전환.
-        """
-        v = agg
-        return (
-            v[off],                         # 인입
-            v[off+1] + v[off+4],            # 승인 (직접 + 전환)
-            v[off+2] + v[off+5],            # 반려 (직접 + 전환)
-            v[off+3] + v[off+4] + v[off+5], # 보류 (보류중 + 승인전환 + 반려전환)
-        )
-
-    kr_ov  = _ov(0)
-    eu_ov  = _ov(6)
-    hq_ov  = _ov(12)
-    tot_ov = tuple(kr_ov[i] + eu_ov[i] + hq_ov[i] for i in range(4))
-
-    # ── 종합 현황 표 (6열) ─────────────────────────────────────────
-    h_row = (
-        "<tr>"
-        + _c("th", "", bg=GREY, cs=2)
-        + _c("th", "티켓 인입 수", bg=GREY, bold_white=True)
-        + _c("th", "승인",        bg=GREY, bold_white=True)
-        + _c("th", "반려",        bg=GREY, bold_white=True)
-        + _c("th", "보류",        bg=GREY, bold_white=True)
-        + "</tr>"
-    )
-    total_row = (
-        "<tr>"
-        + _c("td", "Total", bg=GREY, cs=2, bold_white=True)
-        + _c("td", str(tot_ov[0]), bg=LIGHT_GREY)
-        + _c("td", str(tot_ov[1]), bg=LIGHT_GREY)
-        + _c("td", str(tot_ov[2]), bg=LIGHT_GREY)
-        + _c("td", str(tot_ov[3]), bg=LIGHT_GREY)
-        + "</tr>"
-    )
-    kr_row = (
-        "<tr>"
-        + _c("td", "RHQ", bg=GREY, rs=2, bold_white=True)
-        + _c("td", "KR",  bg=GREY, bold_white=True)
-        + _c("td", str(kr_ov[0]))
-        + _c("td", str(kr_ov[1]))
-        + _c("td", str(kr_ov[2]))
-        + _c("td", str(kr_ov[3]))
-        + "</tr>"
-    )
-    eu_row = (
-        "<tr>"
-        + _c("td", "EU", bg=GREY, bold_white=True)
-        + _c("td", str(eu_ov[0]))
-        + _c("td", str(eu_ov[1]))
-        + _c("td", str(eu_ov[2]))
-        + _c("td", str(eu_ov[3]))
-        + "</tr>"
-    )
-    hq_row = (
-        "<tr>"
-        + _c("td", "HQ",             bg=GREY, bold_white=True)
-        + _c("td", "GBCXD 및 타부문", bg=GREY, bold_white=True)
-        + _c("td", str(hq_ov[0]))
-        + _c("td", str(hq_ov[1]))
-        + _c("td", str(hq_ov[2]))
-        + _c("td", str(hq_ov[3]))
-        + "</tr>"
-    )
-    overall_table = _table(CW["section1_overall"],
-                           [h_row, total_row, kr_row, eu_row, hq_row])
 
     # ── 회차별 트래킹 표 (19열, 4행 헤더) ──────────────────────────
     # 헤더 4행
@@ -885,8 +1151,6 @@ def _build_section1(tickets, current_cycle, hmg_client=None):
     return [
         _h2("1. 티켓 스크리닝 현황"),
         _p(f"(업데이트) {datetime.now().strftime('%y.%m.%d')} 기준"),
-        _h3("■ 종합 현황 (Screen Shot)"),
-        overall_table,
         _h3("■ 회차별 트래킹 현황"),
         tracking_table,
         history_section,
@@ -895,21 +1159,21 @@ def _build_section1(tickets, current_cycle, hmg_client=None):
 
 # ── Section 2-4: 지역별 티켓 히스토리 ────────────────────────────
 def _build_region_section(tickets, region_code, section_num, approved_widths,
-                          pending_widths, rejected_widths, has_cycle_col, ref_rows=None):
-    # Global 티켓은 KR+EU 섹션 모두에 포함, HQ는 HQ만
+                          pending_widths, rejected_widths, has_cycle_col,
+                          active_cycle, ref_rows=None, ref_history=None,
+                          tickets_by_key=None):
+    """지역별 티켓 히스토리 섹션 HTML 빌드.
+
+    ref_history: _load_ref_history_doc2() 반환값. 이전 회차 expand 블록.
+    tickets_by_key: {ticket_key: analysis_dict} — history 행 업데이트용.
+    """
     region_tickets = [t for t in tickets if t.get("region") in {
         "KR": _KR_REGIONS, "EU": _EU_REGIONS, "HQ": _HQ_REGIONS
     }[region_code]]
-    # 전체 티켓 기준 사이클 목록 사용 → 티켓 없는 회차도 펼치기 생성
-    cycles = _get_all_cycles(tickets)
     region_name = {"KR": "KR", "EU": "EU", "HQ": "HQ GBCXD 및 타부문"}[region_code]
 
-    def _filter(cyc=None, appr=None):
-        result = region_tickets
-        if cyc == 0:
-            result = [t for t in result if t.get("cycle_number", 0) == 0]
-        elif cyc is not None:
-            result = [t for t in result if t.get("cycle_number") == cyc]
+    def _filter(appr=None):
+        result = [t for t in region_tickets if t.get("cycle_number") == active_cycle]
         if appr:
             if isinstance(appr, list):
                 result = [t for t in result if _effective_approval(t) in appr]
@@ -917,31 +1181,39 @@ def _build_region_section(tickets, region_code, section_num, approved_widths,
                 result = [t for t in result if _effective_approval(t) == appr]
         return result
 
+    region_hist = (ref_history or {}).get(region_code, {})
+    tbk = tickets_by_key or {}
     parts = [_h2(f"{section_num}. {region_name} 티켓 히스토리")]
 
-    # 승인 티켓
+    # ── 승인 티켓 ──
     parts.append(_p_bold(f"{section_num}.1. 승인 티켓"))
-    parts.append(_expand("Pre-BRD",
-        _build_approved_table(_filter(0, "Approved"), approved_widths, has_cycle_col, is_prebrd=True, ref_rows=ref_rows)))
-    for cn in cycles:
-        parts.append(_expand(_cycle_expand_title(cn),
-            _build_approved_table(_filter(cn, "Approved"), approved_widths, has_cycle_col, ref_rows=ref_rows)))
+    # 이전 회차 (HMG 참조 — closed/resolved 필터 + summary 업데이트)
+    for cycle_title, body_html in region_hist.get('Approved', []):
+        updated = _apply_history_filter_and_update(body_html, tbk, has_cycle_col, 'approved')
+        parts.append(_expand(cycle_title, updated))
+    # 현재 회차
+    parts.append(_expand(_cycle_expand_title(active_cycle),
+        _build_approved_table(_filter("Approved"), approved_widths, has_cycle_col, ref_rows=ref_rows)))
 
-    # 보류 티켓: Pending 상태만 (BRD 제출 후 공식 보류; Pre-BRD 미제출 티켓 제외)
+    # ── 보류 티켓 ──
     parts.append(_p_bold(f"{section_num}.2. 보류 티켓"))
-    parts.append(_expand("Pre-BRD",
-        _build_pending_table(_filter(0, "Pending"), pending_widths, has_cycle_col, prebrd=True, ref_rows=ref_rows)))
-    for cn in cycles:
-        parts.append(_expand(_cycle_expand_title(cn),
-            _build_pending_table(_filter(cn, "Pending"), pending_widths, has_cycle_col, ref_rows=ref_rows)))
+    # 이전 회차 (closed/resolved 필터 + 구조 불일치 재생성)
+    for cycle_title, body_html in region_hist.get('보류', []):
+        updated = _apply_history_filter_and_update(body_html, tbk, has_cycle_col, 'pending')
+        parts.append(_expand(cycle_title, updated))
+    # 현재 회차
+    parts.append(_expand(_cycle_expand_title(active_cycle),
+        _build_pending_table(_filter("보류"), pending_widths, has_cycle_col, ref_rows=ref_rows)))
 
-    # 반려 티켓
+    # ── 반려 티켓 ──
     parts.append(_p_bold(f"{section_num}.3. 반려 티켓"))
-    parts.append(_expand("Pre-BRD",
-        _build_rejected_table(_filter(0, "반려"), rejected_widths, has_cycle_col, prebrd=True, ref_rows=ref_rows)))
-    for cn in cycles:
-        parts.append(_expand(_cycle_expand_title(cn),
-            _build_rejected_table(_filter(cn, "반려"), rejected_widths, has_cycle_col, ref_rows=ref_rows)))
+    # 이전 회차
+    for cycle_title, body_html in region_hist.get('반려', []):
+        updated = _apply_history_filter_and_update(body_html, tbk, has_cycle_col, 'rejected')
+        parts.append(_expand(cycle_title, updated))
+    # 현재 회차
+    parts.append(_expand(_cycle_expand_title(active_cycle),
+        _build_rejected_table(_filter("반려"), rejected_widths, has_cycle_col, ref_rows=ref_rows)))
 
     return parts
 
@@ -951,31 +1223,39 @@ def update(tickets_with_analysis: list[dict], client: ConfluenceClient | None = 
     if client is None:
         client = ConfluenceClient()
 
-    current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
+    active_cycle = get_active_cycle()
 
     # Feature 1: HMG Confluence 참조 문서에서 이전 티켓 행 추출
     hmg_client = HmgConfluenceClient()
     ref_rows = _load_ref_rows_doc2(hmg_client)
+    ref_history = _load_ref_history_doc2(hmg_client, active_cycle)
+    tickets_by_key = {t.get('key', ''): t for t in tickets_with_analysis if t.get('key')}
 
     now = datetime.now()
     note_html = (f'<p><em>{now.strftime("%Y-%m-%d %H:%M")} 전체 재생성, '
-                 f'총 {len(tickets_with_analysis)}건</em></p>')
+                 f'{active_cycle}회차 기준</em></p>')
     _toc = (
         '<ac:structured-macro ac:name="toc" ac:schema-version="1">'
         '<ac:parameter ac:name="style">none</ac:parameter>'
         '</ac:structured-macro>'
     )
     sections = [note_html, _toc]
-    sections += _build_section1(tickets_with_analysis, current_cycle, hmg_client=hmg_client)
+    sections += _build_section1(tickets_with_analysis, active_cycle, hmg_client=hmg_client)
     sections += _build_region_section(
         tickets_with_analysis, "KR", 2,
-        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True, ref_rows=ref_rows)
+        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True,
+        active_cycle=active_cycle, ref_rows=ref_rows,
+        ref_history=ref_history, tickets_by_key=tickets_by_key)
     sections += _build_region_section(
         tickets_with_analysis, "EU", 3,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False,
+        active_cycle=active_cycle, ref_rows=ref_rows,
+        ref_history=ref_history, tickets_by_key=tickets_by_key)
     sections += _build_region_section(
         tickets_with_analysis, "HQ", 4,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False,
+        active_cycle=active_cycle, ref_rows=ref_rows,
+        ref_history=ref_history, tickets_by_key=tickets_by_key)
 
     html = "\n".join(sections)
 
@@ -1038,18 +1318,20 @@ def update_with_new_tickets(tickets_with_analysis: list[dict],
     # Feature 1: HMG Confluence 참조 문서에서 이전 티켓 행 추출
     hmg_client = HmgConfluenceClient()
     ref_rows = _load_ref_rows_doc2(hmg_client)
+    active_cycle = get_active_cycle()
+    ref_history = _load_ref_history_doc2(hmg_client, active_cycle)
+    tickets_by_key = {t.get('key', ''): t for t in tickets_with_analysis if t.get('key')}
 
     now = datetime.now()
     timestamp = as_of if as_of else now.strftime("%m-%d %H:%M")
     note_dt = f"2026-{as_of}" if as_of else now.strftime("%Y-%m-%d %H:%M")
-    current_cycle = max((t.get("cycle_number", 0) for t in tickets_with_analysis), default=0)
 
     if new_ticket_keys:
         keys_str = ', '.join(new_ticket_keys)
         note_text = (f"{note_dt} {len(new_ticket_keys)}개의 티켓 추가, "
                      f"티켓 key: {keys_str}")
     else:
-        note_text = f"{note_dt} 업데이트 (총 {len(tickets_with_analysis)}건)"
+        note_text = f"{note_dt} 업데이트 ({active_cycle}회차 기준)"
     note_html = f'<p><em>{note_text}</em></p>'
 
     _toc = (
@@ -1058,16 +1340,22 @@ def update_with_new_tickets(tickets_with_analysis: list[dict],
         '</ac:structured-macro>'
     )
     sections = [note_html, _toc]
-    sections += _build_section1(tickets_with_analysis, current_cycle, hmg_client=hmg_client)
+    sections += _build_section1(tickets_with_analysis, active_cycle, hmg_client=hmg_client)
     sections += _build_region_section(
         tickets_with_analysis, "KR", 2,
-        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True, ref_rows=ref_rows)
+        CW["kr_approved"], CW["kr_pending"], CW["kr_rejected"], has_cycle_col=True,
+        active_cycle=active_cycle, ref_rows=ref_rows,
+        ref_history=ref_history, tickets_by_key=tickets_by_key)
     sections += _build_region_section(
         tickets_with_analysis, "EU", 3,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False,
+        active_cycle=active_cycle, ref_rows=ref_rows,
+        ref_history=ref_history, tickets_by_key=tickets_by_key)
     sections += _build_region_section(
         tickets_with_analysis, "HQ", 4,
-        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False, ref_rows=ref_rows)
+        CW["eu_approved"], CW["eu_pending"], CW["eu_rejected"], has_cycle_col=False,
+        active_cycle=active_cycle, ref_rows=ref_rows,
+        ref_history=ref_history, tickets_by_key=tickets_by_key)
     html = "\n".join(sections)
 
     new_title = f"{timestamp} 신규/개선 전체 현황 (AI 생성)"
