@@ -111,16 +111,37 @@ def cmd_list_fields():
 
 _STATUS_FILTER = 'status not in ("Dropped", "해결됨", "종료", "RESOLVE", "Deployed")'
 
-_WEEKLY_JQL = f'created >= "2026-01-01" AND {_STATUS_FILTER}'
-
 # ── Test 모드 설정 ─────────────────────────────────────────────────────────
 _TEST_CYCLES = [6, 7]  # test 모드에서만 조회할 회차
 
 
+def _get_weekly_jql() -> str:
+    """전체 티켓 조회 JQL.
+    - 현재 회차 이전: 상태 무관하게 모두 포함 (히스토리 보전)
+    - 현재 회차: 종료·취소 상태 제외 (_STATUS_FILTER 적용)
+    """
+    current_start, _ = get_cycle_bounds(get_cycle_number(date.today()))
+    return (
+        'created >= "2026-01-01" AND ('
+        f'created < "{current_start}" '
+        f'OR {_STATUS_FILTER}'
+        ')'
+    )
+
+
 def _build_test_jql() -> str:
-    """6·7회차 생성일 범위 + 상태 필터 JQL."""
-    min_date = get_cycle_bounds(_TEST_CYCLES[0])[0]   # 6회차 시작일
-    max_date = get_cycle_bounds(_TEST_CYCLES[-1])[1]  # 7회차 종료일
+    """6·7회차 생성일 범위 JQL.
+    - 이전 회차(6회차): 상태 무관 포함, 현재 회차(7회차): 종료 상태 제외.
+    """
+    min_date = get_cycle_bounds(_TEST_CYCLES[0])[0]
+    max_date = get_cycle_bounds(_TEST_CYCLES[-1])[1]
+    current_start, _ = get_cycle_bounds(get_cycle_number(date.today()))
+    if current_start > min_date:
+        return (
+            f'created >= "{min_date}" AND created <= "{max_date}" AND ('
+            f'created < "{current_start}" OR {_STATUS_FILTER}'
+            ')'
+        )
     return f'created >= "{min_date}" AND created <= "{max_date}" AND {_STATUS_FILTER}'
 
 
@@ -139,7 +160,7 @@ def cmd_doc1(as_of: str | None = None, test_mode: bool = False):
     """월요일: 전체 티켓 재빌드 후 새 페이지 생성."""
     _check_env()
     jira = JiraClient()
-    jql = _build_test_jql() if test_mode else _WEEKLY_JQL
+    jql = _build_test_jql() if test_mode else _get_weekly_jql()
     tickets = _fetch_and_analyze(
         extra_jql=jql,
         save_path="tickets_analyzed_latest.json",
@@ -173,7 +194,7 @@ def cmd_doc1_daily(as_of: str | None = None, from_date: str | None = None,
 def cmd_doc2(as_of: str | None = None, test_mode: bool = False):
     """월요일 10시: 전체 티켓 재빌드 후 새 페이지 생성."""
     _check_env()
-    jql = _build_test_jql() if test_mode else _WEEKLY_JQL
+    jql = _build_test_jql() if test_mode else _get_weekly_jql()
     tickets = _fetch_and_analyze(
         extra_jql=jql,
         save_path="tickets_analyzed_latest.json",
@@ -252,7 +273,7 @@ def cmd_snapshot(force_cycle=None, as_of: str | None = None):
 def cmd_all(test_mode: bool = False):
     _check_env()
     jira = JiraClient()
-    jql = _build_test_jql() if test_mode else _WEEKLY_JQL
+    jql = _build_test_jql() if test_mode else _get_weekly_jql()
     tickets = _fetch_and_analyze(
         extra_jql=jql,
         save_path="tickets_analyzed_latest.json",
