@@ -12,17 +12,17 @@ class ConfluenceClient:
         self._page_cache: dict[str, dict] = {}
 
     def _get(self, path: str, params: dict = None) -> dict:
-        r = requests.get(f"{self.base}{path}", auth=self.auth, headers=self.headers, params=params)
+        r = requests.get(f"{self.base}{path}", auth=self.auth, headers=self.headers, params=params, timeout=30)
         r.raise_for_status()
         return r.json()
 
     def _put(self, path: str, payload: dict) -> dict:
-        r = requests.put(f"{self.base}{path}", auth=self.auth, headers=self.headers, json=payload)
+        r = requests.put(f"{self.base}{path}", auth=self.auth, headers=self.headers, json=payload, timeout=30)
         r.raise_for_status()
         return r.json()
 
     def _post(self, path: str, payload: dict) -> dict:
-        r = requests.post(f"{self.base}{path}", auth=self.auth, headers=self.headers, json=payload)
+        r = requests.post(f"{self.base}{path}", auth=self.auth, headers=self.headers, json=payload, timeout=30)
         if not r.ok:
             print(f"[Confluence 오류] POST {path}: {r.status_code}\n{r.text[:800]}")
         r.raise_for_status()
@@ -52,7 +52,7 @@ class ConfluenceClient:
         base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
         r = requests.get(f"{base_v1}/content/{page_id}",
                          auth=self.auth, headers={"Accept": "application/json"},
-                         params={"expand": "space"})
+                         params={"expand": "space"}, timeout=30)
         r.raise_for_status()
         space_key = r.json()["space"]["key"]
         ConfluenceClient._space_key_cache = space_key
@@ -63,7 +63,7 @@ class ConfluenceClient:
 
     def _post_v1(self, path: str, payload: dict) -> dict:
         base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
-        r = requests.post(f"{base_v1}{path}", auth=self.auth, headers=self.headers, json=payload)
+        r = requests.post(f"{base_v1}{path}", auth=self.auth, headers=self.headers, json=payload, timeout=30)
         r.raise_for_status()
         return r.json()
 
@@ -164,7 +164,7 @@ class ConfluenceClient:
         """페이지 영구 삭제 (v1 REST API)."""
         base_v1 = f"{CONFLUENCE_BASE_URL}/wiki/rest/api"
         r = requests.delete(f"{base_v1}/content/{page_id}",
-                            auth=self.auth, headers={"Accept": "application/json"})
+                            auth=self.auth, headers={"Accept": "application/json"}, timeout=30)
         if r.status_code == 204:
             print(f"[Confluence] 페이지 삭제 완료 (id={page_id})")
         else:
@@ -202,20 +202,20 @@ class HmgConfluenceClient:
         r = requests.get(
             f"{self.base}/pages/{page_id}",
             auth=self.auth, headers=self.headers,
-            params={"body-format": "storage"},
+            params={"body-format": "storage"}, timeout=60,
         )
         r.raise_for_status()
         data = r.json()
         return data["body"]["storage"]["value"], data["version"]["number"], data["title"]
 
     def get_child_pages(self, folder_id: str) -> list[dict]:
-        """폴더 내 자식 페이지 전체 조회 (최신 수정순, 페이지네이션 포함)."""
+        """폴더 내 자식 페이지 전체 조회 (페이지네이션 포함, 최신 수정순 Python 정렬)."""
         results: list[dict] = []
-        params: dict = {"parentId": folder_id, "limit": 50, "sort": "-modified"}
+        params: dict = {"parentId": folder_id, "limit": 50}
         while True:
             r = requests.get(
                 f"{self.base}/pages",
-                auth=self.auth, headers=self.headers, params=params,
+                auth=self.auth, headers=self.headers, params=params, timeout=30,
             )
             r.raise_for_status()
             data = r.json()
@@ -230,5 +230,7 @@ class HmgConfluenceClient:
                     break
             if not cursor:
                 break
-            params = {"parentId": folder_id, "limit": 50, "sort": "-modified", "cursor": cursor}
+            params = {"parentId": folder_id, "limit": 50, "cursor": cursor}
+        # version.createdAt 기준 최신순 정렬 (API sort 파라미터 미지원 대응)
+        results.sort(key=lambda p: p.get("version", {}).get("createdAt", ""), reverse=True)
         return results

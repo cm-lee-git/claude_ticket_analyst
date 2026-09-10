@@ -20,5 +20,11 @@ _*.py
 _*.html
 *.html
 
+# 일회성 테스트/디버그 스크립트
+check_page.py
+fetch_ticket.py
+run_single_ticket.py
+verify_page.py
+
 # Windows 아티팩트
 nul

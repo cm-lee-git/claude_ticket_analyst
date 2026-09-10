@@ -79,16 +79,16 @@ CW = {
                            83, 98, 81, 92, 92, 106, 87, 83, 92, 92, 92],
     "kr_approved":        [104, 93, 101, 167, 93, 93, 93,       # 12열: KR 승인
                            291, 93, 93, 93, 104],
-    "kr_pending":         [208, 110, 110, 110, 110, 110,        # 14열: KR 보류 (항목분포 2열 추가)
-                           110, 110, 110, 93, 93, 110, 110, 110],
-    "kr_rejected":        [200, 132, 132, 135, 132, 132,        # 12열: KR 반려 (항목분포 2열 추가)
-                           132, 132, 93, 93, 159, 132],
+    "kr_pending":         [208, 110, 110, 110, 110, 110,        # 12열: KR 보류
+                           110, 110, 110, 180, 180, 110],
+    "kr_rejected":        [200, 132, 132, 135, 132, 132,        # 9열: KR 반려
+                           132, 132, 250],
     "eu_approved":        [198, 122, 122, 122, 122, 122,        # 11열: EU 승인
                            122, 122, 122, 122, 122],
-    "eu_pending":         [198, 122, 122, 122, 122, 122,        # 13열: EU 보류 (항목분포 2열 추가)
-                           122, 122, 93, 93, 122, 122, 122],
-    "eu_rejected":        [198, 122, 122, 122, 122, 122,        # 12열: EU 반려 (항목분포 2열 추가)
-                           122, 122, 93, 93, 122, 122],
+    "eu_pending":         [198, 122, 122, 122, 122, 122,        # 11열: EU 보류
+                           122, 122, 155, 155, 110],
+    "eu_rejected":        [198, 122, 122, 122, 122, 122,        # 8열: EU 반려
+                           122, 122, 250],
     "history":            [122, 108, 87, 92, 71, 90, 85, 106,  # 13열: 마감 히스토리
                            83, 98, 81, 92, 92],
 }
@@ -434,34 +434,27 @@ def _rebuild_ticket_rows(t: dict, has_cycle_col: bool, table_type: str) -> str:
     elif table_type == 'pending':
         hold_code = t.get('hold_code') or ''
         reason = t.get('hold_reason') or (t.get('background', '')[:150] if hold_code else '')
-        row1 = (
-            f'<tr>{td_rs("1")}{cc}'
-            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
-            f'{td_rs(t.get("summary", ""))}'
-            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
-            f'{td_rs(t.get("created", ""))}{td_rs(t.get("due_date", ""))}'
-            f'{td_rs(hold_code)}{td_rs(reason)}'
-            f'<td><p>{SCORE_LABELS[0]}</p></td>'
-            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
-            f'{td_rs("")}{td_rs("")}{td_rs("")}</tr>'
+        return (
+            f'<tr><td><p>1</p></td>{cc}'
+            f'<td><p>{_key_link(key)}</p></td>'
+            f'<td><p>{t.get("summary", "")}</p></td>'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""), rs=1)}'
+            f'<td><p>{t.get("created", "")}</p></td><td><p>{t.get("due_date", "")}</p></td>'
+            f'<td><p>{hold_code}</p></td><td><p>{reason}</p></td>'
+            f'<td></td><td></td><td></td></tr>'
         )
-        return row1 + score_rows
 
     elif table_type == 'rejected':
         rej_code = t.get('rejection_code') or ''
         reason = t.get('rejection_reason') or (t.get('problem', '')[:150] if rej_code else '')
-        row1 = (
-            f'<tr>{td_rs("1")}{cc}'
-            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
-            f'{td_rs(t.get("summary", ""))}'
-            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
-            f'{td_rs(t.get("created", ""))}{td_rs(t.get("due_date", ""))}'
-            f'{td_rs(rej_code)}{td_rs(reason)}'
-            f'<td><p>{SCORE_LABELS[0]}</p></td>'
-            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
-            f'{td_rs("")}</tr>'
+        return (
+            f'<tr><td><p>1</p></td>{cc}'
+            f'<td><p>{_key_link(key)}</p></td>'
+            f'<td><p>{t.get("summary", "")}</p></td>'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""), rs=1)}'
+            f'<td><p>{t.get("created", "")}</p></td><td><p>{t.get("due_date", "")}</p></td>'
+            f'<td><p>{rej_code}</p></td><td><p>{reason}</p></td></tr>'
         )
-        return row1 + score_rows
 
     return ''
 
@@ -691,93 +684,20 @@ def _build_pending_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=
             ("#", 1, 1), ("회차", 1, 1), ("Key", 1, 1), ("Ticket Summary", 1, 1),
             ("Reporter", 1, 1), ("Created", 1, 1), ("Due date", 1, 1),
             ("보류 code", 1, 1), ("보류 사유", 1, 1),
-            ("항목 분포", 1, 2),
-            ("댓글 히스토리", 1, 1), ("최종 결과(승인/반려 전환 결과 및 사유 & 날짜)", 1, 1), ("IMG", 1, 1),
+            ("댓글 히스토리", 1, 1), ("최종 결과(승인/반려 전환 결과 및 사유 & 날짜)", 1, 1),
+            ("IMG", 1, 1),
         ])
     else:
         header = _th_span([
             ("#", 1, 1), ("Key", 1, 1), ("Ticket Summary", 1, 1),
             ("Reporter", 1, 1), ("Created", 1, 1), ("Due date", 1, 1),
             ("보류 code", 1, 1), ("보류 사유", 1, 1),
-            ("항목 분포", 1, 2),
-            ("댓글 히스토리", 1, 1), ("최종 결과(승인/반려 전환 결과 및 사유 & 날짜)", 1, 1), ("IMG", 1, 1),
-        ])
-
-    def td_rs(text, rs=6):
-        return f'<td rowspan="{rs}"><p>{text}</p></td>'
-
-    rows = [header]
-    seq = 0
-    for t in tickets:
-        seq += 1
-        key = t.get("key", "")
-        created = t.get("created", "")
-        if ref_rows and key in ref_rows:
-            _exp = 14 if has_cycle_col else 13
-            _act = _count_effective_cols_first_row(ref_rows[key])
-            if _act == _exp:
-                rows.append(ref_rows[key])
-                continue
-            print(f"  [ref 구조 불일치-보류] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
-        hold_code = t.get("hold_code") or ""
-        reason = t.get("hold_reason") or (t.get("background", "")[:150] if hold_code else "")
-        scores = t.get("scores", {})
-        cycle_col = f'<td rowspan="6"><p>{cycle_label(t.get("cycle_number", 0))}</p></td>' if has_cycle_col else ""
-
-        rows.append(
-            f"<tr>"
-            f'{td_rs(str(seq))}'
-            f'{cycle_col}'
-            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
-            f'{td_rs(t.get("summary", ""))}'
-            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
-            f'{td_rs(created)}'
-            f'{td_rs(t.get("due_date", ""))}'
-            f'{td_rs(hold_code)}'
-            f'{td_rs(reason)}'
-            f'<td><p>{SCORE_LABELS[0]}</p></td>'
-            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
-            f'{td_rs("")}'
-            f'{td_rs("")}'
-            f'{td_rs("")}'
-            f"</tr>"
-        )
-        for i in range(1, 6):
-            rows.append(
-                f"<tr>"
-                f'<td><p>{SCORE_LABELS[i]}</p></td>'
-                f'<td><p>{_score_mark(scores.get(SCORE_KEYS[i], 0))}</p></td>'
-                f"</tr>"
-            )
-
-    return _table(widths, rows)
-
-
-# ── 반려 티켓 테이블 (rowspan=6, 항목 분포 포함) ─────────────────
-def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=None):
-    tickets = sorted(tickets, key=lambda t: t.get("created", ""))
-    if not tickets:
-        return _no_tickets(prebrd=prebrd)
-
-    if has_cycle_col:
-        header = _th_span([
-            ("#", 1, 1), ("회차", 1, 1), ("Key", 1, 1), ("Ticket Summary", 1, 1),
-            ("Reporter", 1, 1), ("Created", 1, 1), ("Due date", 1, 1),
-            ("반려 code", 1, 1), ("반려 사유", 1, 1),
-            ("항목 분포", 1, 2),
-            ("IMG", 1, 1),
-        ])
-    else:
-        header = _th_span([
-            ("#", 1, 1), ("Key", 1, 1), ("Ticket Summary", 1, 1),
-            ("Reporter", 1, 1), ("Created", 1, 1), ("Due date", 1, 1),
-            ("반려 code", 1, 1), ("반려 사유", 1, 1),
-            ("항목 분포", 1, 2),
+            ("댓글 히스토리", 1, 1), ("최종 결과(승인/반려 전환 결과 및 사유 & 날짜)", 1, 1),
             ("IMG", 1, 1),
         ])
 
-    def td_rs(text, rs=6):
-        return f'<td rowspan="{rs}"><p>{text}</p></td>'
+    def td(text):
+        return f'<td><p>{text}</p></td>'
 
     rows = [header]
     seq = 0
@@ -791,35 +711,83 @@ def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows
             if _act == _exp:
                 rows.append(ref_rows[key])
                 continue
-            print(f"  [ref 구조 불일치-반려] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
-        rej_code = t.get("rejection_code") or ""
-        reason = t.get("rejection_reason") or (t.get("problem", "")[:150] if rej_code else "")
-        scores = t.get("scores", {})
-        cycle_col = f'<td rowspan="6"><p>{cycle_label(t.get("cycle_number", 0))}</p></td>' if has_cycle_col else ""
+            print(f"  [ref 구조 불일치-보류] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
+        hold_code = t.get("hold_code") or ""
+        reason = t.get("hold_reason") or (t.get("background", "")[:150] if hold_code else "")
+        cycle_col = f'<td><p>{cycle_label(t.get("cycle_number", 0))}</p></td>' if has_cycle_col else ""
 
         rows.append(
             f"<tr>"
-            f'{td_rs(str(seq))}'
+            f'{td(str(seq))}'
             f'{cycle_col}'
-            f'<td rowspan="6"><p>{_key_link(key)}</p></td>'
-            f'{td_rs(t.get("summary", ""))}'
-            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""))}'
-            f'{td_rs(created)}'
-            f'{td_rs(t.get("due_date", ""))}'
-            f'{td_rs(rej_code)}'
-            f'{td_rs(reason)}'
-            f'<td><p>{SCORE_LABELS[0]}</p></td>'
-            f'<td><p>{_score_mark(scores.get(SCORE_KEYS[0], 0))}</p></td>'
-            f'{td_rs("")}'
+            f'<td><p>{_key_link(key)}</p></td>'
+            f'{td(t.get("summary", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""), rs=1)}'
+            f'{td(created)}'
+            f'{td(t.get("due_date", ""))}'
+            f'{td(hold_code)}'
+            f'{td(reason)}'
+            f'<td></td>'
+            f'<td></td>'
+            f'<td></td>'
             f"</tr>"
         )
-        for i in range(1, 6):
-            rows.append(
-                f"<tr>"
-                f'<td><p>{SCORE_LABELS[i]}</p></td>'
-                f'<td><p>{_score_mark(scores.get(SCORE_KEYS[i], 0))}</p></td>'
-                f"</tr>"
-            )
+
+    return _table(widths, rows)
+
+
+# ── 반려 티켓 테이블 ──────────────────────────────────────────────
+def _build_rejected_table(tickets, widths, has_cycle_col, prebrd=False, ref_rows=None):
+    tickets = sorted(tickets, key=lambda t: t.get("created", ""))
+    if not tickets:
+        return _no_tickets(prebrd=prebrd)
+
+    if has_cycle_col:
+        header = _th_span([
+            ("#", 1, 1), ("회차", 1, 1), ("Key", 1, 1), ("Ticket Summary", 1, 1),
+            ("Reporter", 1, 1), ("Created", 1, 1), ("Due date", 1, 1),
+            ("반려 code", 1, 1), ("반려 사유", 1, 1),
+        ])
+    else:
+        header = _th_span([
+            ("#", 1, 1), ("Key", 1, 1), ("Ticket Summary", 1, 1),
+            ("Reporter", 1, 1), ("Created", 1, 1), ("Due date", 1, 1),
+            ("반려 code", 1, 1), ("반려 사유", 1, 1),
+        ])
+
+    def td(text):
+        return f'<td><p>{text}</p></td>'
+
+    rows = [header]
+    seq = 0
+    for t in tickets:
+        seq += 1
+        key = t.get("key", "")
+        created = t.get("created", "")
+        if ref_rows and key in ref_rows:
+            _exp = 9 if has_cycle_col else 8
+            _act = _count_effective_cols_first_row(ref_rows[key])
+            if _act == _exp:
+                rows.append(ref_rows[key])
+                continue
+            print(f"  [ref 구조 불일치-반려] {key}: 예상 {_exp}열, 실제 {_act}열 → 재생성")
+        rej_code = t.get("rejection_code") or ""
+        reason = t.get("rejection_reason") or (t.get("problem", "")[:150] if rej_code else "")
+        cycle_col = f'<td><p>{cycle_label(t.get("cycle_number", 0))}</p></td>' if has_cycle_col else ""
+
+        rows.append(
+            f"<tr>"
+            f'{td(str(seq))}'
+            f'{cycle_col}'
+            f'<td><p>{_key_link(key)}</p></td>'
+            f'{td(t.get("summary", ""))}'
+            f'{_reporter_html(t.get("reporter", ""), t.get("initiator", ""), rs=1)}'
+            f'{td(created)}'
+            f'{td(t.get("due_date", ""))}'
+            f'{td(rej_code)}'
+            f'{td(reason)}'
+            f"</tr>"
+        )
 
     return _table(widths, rows)
 
