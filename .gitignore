@@ -26,5 +26,8 @@ fetch_ticket.py
 run_single_ticket.py
 verify_page.py
 
+# 자동 업데이트 버전 추적 (머신별 상태)
+.last_update_sha
+
 # Windows 아티팩트
 nul

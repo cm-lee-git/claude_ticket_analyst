@@ -52,8 +52,11 @@ call "%~dp0setup_tasks.bat"
 echo.
 echo ================================================
 echo  설정 완료!
-echo  이제 매일 08:30에 자동으로 코드가 업데이트됩니다.
-echo  수동 업데이트: update.bat 실행
+echo.
+echo  [자동 업데이트 안내]
+echo  - 매일 08:30에 GitHub에서 최신 코드를 자동으로 받아옵니다.
+echo  - .env 파일의 GITHUB_TOKEN 이 반드시 입력되어 있어야 합니다.
+echo  - 수동 업데이트: update.bat 실행
 echo ================================================
 echo.
 endlocal
